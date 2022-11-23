@@ -152,10 +152,12 @@ func (a *accessList) GetAccessList() map[string]interface{} {
 		if v >= 0 {
 			slotMap := a.slots[v]
 			slots := make([]string, len(slotMap))
+			i := 0
 			for k := range slotMap {
-				slots = append(slots, k.String())
+				slots[i] = k.String()
+				i += 1
 			}
-			result[k.String()] = newSlotmap
+			result[k.String()] = slots
 		} else {
 			result[k.String()] = []string{}
 		}
