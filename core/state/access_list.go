@@ -162,3 +162,31 @@ func (al *accessList) PrettyPrint() string {
 	}
 	return out.String()
 }
+
+// Get accessList.
+func (a *accessList) GetAccessList() map[string]interface{} {
+	/*
+	for address := range state.accessList.addresses {
+		index := state.accessList.addresses[address]
+		if index >= 0 {
+			stateSlots := state.accessList.slots[index]
+			for s := range stateSlots {
+			}
+		}
+	}
+	*/
+	result := map[string]interface{}{}
+	for k, v := range a.addresses {
+		if v >= 0 {
+			slotMap := a.slots[v]
+			slots := make([]string, len(slotMap))
+			for k := range slotMap {
+				slots = append(slots, k.String())
+			}
+			result[k.String()] = newSlotmap
+		} else {
+			result[k.String()] = []string{}
+		}
+	}
+	return result
+}
