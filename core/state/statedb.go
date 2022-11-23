@@ -1449,3 +1449,8 @@ func copy2DSet[k comparable](set map[k]map[common.Hash][]byte) map[k]map[common.
 	}
 	return copied
 }
+
+// GetAccessList 
+func (s *StateDB) GetAccessList() map[string]interface{} {
+	return s.accessList.GetAccessList()
+}
