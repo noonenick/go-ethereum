@@ -2241,7 +2241,7 @@ func (s *BundleAPI) CallBundle(ctx context.Context, args CallBundleArgs) (map[st
 	gasFees := new(big.Int)
 	for i, tx := range txs {
 		coinbaseBalanceBeforeTx := state.GetBalance(coinbase)
-		state.Prepare(tx.Hash(), i)
+		state.SetTxContext(tx.Hash(), i)
 
 		receipt, result, err := core.ApplyTransactionWithResult(s.b.ChainConfig(), s.chain, &coinbase, gp, state, header, tx, &header.GasUsed, vmconfig)
 		if err != nil {
@@ -2288,6 +2288,7 @@ func (s *BundleAPI) CallBundle(ctx context.Context, args CallBundleArgs) (map[st
 		jsonResult["ethSentToCoinbase"] = new(big.Int).Sub(coinbaseDiffTx, gasFeesTx).String()
 		jsonResult["gasPrice"] = new(big.Int).Div(coinbaseDiffTx, big.NewInt(int64(receipt.GasUsed))).String()
 		jsonResult["gasUsed"] = receipt.GasUsed
+		jsonResult["accessList"] = state.accessList.GetAccessList()
 		results = append(results, jsonResult)
 	}
 
@@ -2391,7 +2392,7 @@ func (s *BundleAPI) EstimateGasBundle(ctx context.Context, args EstimateGasBundl
 		rand.Read(randomHash[:])
 
 		// New random hash since its a call
-		statedb.Prepare(randomHash, i)
+		statedb.SetTxContext(randomHash, i)
 
 		// Convert tx args to msg to apply state transition
 		msg, err := txArgs.ToMessage(globalGasCap, header.BaseFee)
