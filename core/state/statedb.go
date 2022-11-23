@@ -1434,3 +1434,8 @@ func (s *StateDB) Witness() *stateless.Witness {
 func (s *StateDB) AccessEvents() *AccessEvents {
 	return s.accessEvents
 }
+
+// GetAccessList 
+func (s *StateDB) GetAccessList() map[string]interface{} {
+	return s.accessList.GetAccessList()
+}

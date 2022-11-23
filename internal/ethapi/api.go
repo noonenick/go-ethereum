@@ -2057,7 +2057,7 @@ func (s *BundleAPI) CallBundle(ctx context.Context, args CallBundleArgs) (map[st
 		jsonResult["ethSentToCoinbase"] = new(big.Int).Sub(coinbaseDiffTx, gasFeesTx).String()
 		jsonResult["gasPrice"] = new(big.Int).Div(coinbaseDiffTx, big.NewInt(int64(receipt.GasUsed))).String()
 		jsonResult["gasUsed"] = receipt.GasUsed
-		jsonResult["accessList"] = state.accessList.GetAccessList()
+		jsonResult["accessList"] = state.GetAccessList()
 		results = append(results, jsonResult)
 	}
 
