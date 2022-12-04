@@ -628,6 +628,11 @@ web3._extend({
 			call: 'eth_estimateGasBundle',
 			params: 1,
 		}),
+		new web3._extend.Method({
+			name: 'searchBundle',
+			call: 'eth_searchBundle',
+			params: 1,
+		}),
 			name: 'capabilities',
 			call: 'eth_capabilities',
 			params: 0,
