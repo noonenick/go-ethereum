@@ -2626,7 +2626,7 @@ func (s *BundleAPI) SearchBundle(ctx context.Context, args SearchBundleArgs) (ma
 		jsonResult["gasPrice"] = new(big.Int).Div(coinbaseDiffTx, big.NewInt(int64(receipt.GasUsed))).String()
 		jsonResult["gasUsed"] = receipt.GasUsed
 		jsonResult["accessList"] = state.GetAccessList()
-		jsonResult["logs"] = string(json.Marshal(receipt.Logs))
+		jsonResult["logs"] = receipt.Logs
 		results = append(results, jsonResult)
 	}
 
