@@ -2002,13 +2002,10 @@ func (s *BundleAPI) CallBundle(ctx context.Context, args CallBundleArgs) (map[st
 	gp := new(core.GasPool).AddGas(math.MaxUint64)
 
 	results := []map[string]interface{}{}
-	coinbaseBalanceBefore := state.GetBalance(coinbase)
 
 	signer := types.MakeSigner(s.b.ChainConfig(), blockNumber)
 	var totalGasUsed uint64
-	gasFees := new(big.Int)
 	for i, tx := range txs {
-		coinbaseBalanceBeforeTx := state.GetBalance(coinbase)
 		//for state.AddLog
 		state.SetTxContext(tx.Hash(), i)
 
@@ -2034,6 +2031,7 @@ func (s *BundleAPI) CallBundle(ctx context.Context, args CallBundleArgs) (map[st
 		}
 		totalGasUsed += receipt.GasUsed
 		gasPrice, err := tx.EffectiveGasTip(header.BaseFee)
+		gasFeesTx := new(big.Int).Mul(big.NewInt(int64(receipt.GasUsed)), gasPrice)
 		if err != nil {
 			return nil, fmt.Errorf("err: %w; txhash %s", err, tx.Hash())
 		}
@@ -2349,6 +2347,7 @@ func (s *BundleAPI) SearchBundle(ctx context.Context, args SearchBundleArgs) (ma
 			jsonResult["value"] = "0x" + string(dst)
 		}
 		jsonResult["gasUsed"] = receipt.GasUsed
+		jsonResult["gasFees"] = gasFeesTx.String()
 		jsonResult["logs"] = receipt.Logs
 		results = append(results, jsonResult)
 	}
@@ -2358,17 +2357,13 @@ func (s *BundleAPI) SearchBundle(ctx context.Context, args SearchBundleArgs) (ma
 		if err != nil {
 			return nil, fmt.Errorf("err: %w; calls.ToMessage %s", err, i)
 		}
-		evm, vmError, err := b.GetEVM(ctx, msg, state, header, vm.Config{NoBaseFee: true})
-		if err != nil {
-			return nil, fmt.Errorf("err: %w; calls.GetEVM %s", err, i)
-		}
 		context := core.NewEVMBlockContext(header, s.chain, &coinbase)
 		txContext := core.NewEVMTxContext(msg)
-		evm := vm.NewEVM(context, txContext, state, s.b.ChainConfig(), &vm.Config{NoBaseFee: true})
+		evm := vm.NewEVM(context, txContext, state, s.b.ChainConfig(), vm.Config{NoBaseFee: true})
 		// Execute the message.
 		//gp := new(core.GasPool).AddGas(math.MaxUint64)
 		result, err := core.ApplyMessage(evm, msg, gp)
-		if err := vmError(); err != nil {
+		if err := state.Error(); err != nil {
 			return nil, fmt.Errorf("err: %w; calls.ApplyMessage %s", err, i)
 		}
 		jsonResult := map[string]interface{}{}
