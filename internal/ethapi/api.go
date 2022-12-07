@@ -2004,12 +2004,12 @@ func (s *BundleAPI) CallBundle(ctx context.Context, args CallBundleArgs) (map[st
 	results := []map[string]interface{}{}
 	coinbaseBalanceBefore := state.GetBalance(coinbase)
 
-	bundleHash := sha3.NewLegacyKeccak256()
 	signer := types.MakeSigner(s.b.ChainConfig(), blockNumber)
 	var totalGasUsed uint64
 	gasFees := new(big.Int)
 	for i, tx := range txs {
 		coinbaseBalanceBeforeTx := state.GetBalance(coinbase)
+		//for state.AddLog
 		state.SetTxContext(tx.Hash(), i)
 
 		receipt, result, err := core.ApplyTransactionWithResult(s.b.ChainConfig(), s.chain, &coinbase, gp, state, header, tx, &header.GasUsed, vmconfig)
@@ -2037,9 +2037,6 @@ func (s *BundleAPI) CallBundle(ctx context.Context, args CallBundleArgs) (map[st
 		if err != nil {
 			return nil, fmt.Errorf("err: %w; txhash %s", err, tx.Hash())
 		}
-		gasFeesTx := new(big.Int).Mul(big.NewInt(int64(receipt.GasUsed)), gasPrice)
-		gasFees.Add(gasFees, gasFeesTx)
-		bundleHash.Write(tx.Hash().Bytes())
 		if result.Err != nil {
 			jsonResult["error"] = result.Err.Error()
 			revert := result.Revert()
@@ -2204,6 +2201,7 @@ func (s *BundleAPI) EstimateGasBundle(ctx context.Context, args EstimateGasBundl
 // SearchBundleArgs represents the arguments for a call.
 type SearchBundleArgs struct {
 	Txs                    []hexutil.Bytes       `json:"txs"`
+	Calls                  []TransactionArgs     `json:"calls"`
 	BlockNumber            rpc.BlockNumber       `json:"blockNumber"`
 	StateBlockNumberOrHash rpc.BlockNumberOrHash `json:"stateBlockNumber"`
 	Coinbase               *string               `json:"coinbase"`
@@ -2350,28 +2348,49 @@ func (s *BundleAPI) SearchBundle(ctx context.Context, args SearchBundleArgs) (ma
 			hex.Encode(dst, result.Return())
 			jsonResult["value"] = "0x" + string(dst)
 		}
-		coinbaseDiffTx := new(big.Int).Sub(state.GetBalance(coinbase), coinbaseBalanceBeforeTx)
-		jsonResult["coinbaseDiff"] = coinbaseDiffTx.String()
-		jsonResult["gasFees"] = gasFeesTx.String()
-		jsonResult["ethSentToCoinbase"] = new(big.Int).Sub(coinbaseDiffTx, gasFeesTx).String()
-		jsonResult["gasPrice"] = new(big.Int).Div(coinbaseDiffTx, big.NewInt(int64(receipt.GasUsed))).String()
 		jsonResult["gasUsed"] = receipt.GasUsed
-		jsonResult["accessList"] = state.GetAccessList()
 		jsonResult["logs"] = receipt.Logs
+		results = append(results, jsonResult)
+	}
+	for i, txArgs := range args.Calls {
+		// Get a new instance of the EVM.
+		msg, err := txArgs.ToMessage(s.b.RPCGasCap(), header.BaseFee)
+		if err != nil {
+			return nil, fmt.Errorf("err: %w; calls.ToMessage %s", err, i)
+		}
+		evm, vmError, err := b.GetEVM(ctx, msg, state, header, vm.Config{NoBaseFee: true})
+		if err != nil {
+			return nil, fmt.Errorf("err: %w; calls.GetEVM %s", err, i)
+		}
+		context := core.NewEVMBlockContext(header, s.chain, &coinbase)
+		txContext := core.NewEVMTxContext(msg)
+		evm := vm.NewEVM(context, txContext, state, s.b.ChainConfig(), &vm.Config{NoBaseFee: true})
+		// Execute the message.
+		//gp := new(core.GasPool).AddGas(math.MaxUint64)
+		result, err := core.ApplyMessage(evm, msg, gp)
+		if err := vmError(); err != nil {
+			return nil, fmt.Errorf("err: %w; calls.ApplyMessage %s", err, i)
+		}
+		jsonResult := map[string]interface{}{}
+		if result.Err != nil {
+			jsonResult["error"] = result.Err.Error()
+			revert := result.Revert()
+			if len(revert) > 0 {
+				jsonResult["revert"] = string(revert)
+			}
+		} else {
+			dst := make([]byte, hex.EncodedLen(len(result.Return())))
+			hex.Encode(dst, result.Return())
+			jsonResult["value"] = "0x" + string(dst)
+		}
 		results = append(results, jsonResult)
 	}
 
 	ret := map[string]interface{}{}
 	ret["results"] = results
-	coinbaseDiff := new(big.Int).Sub(state.GetBalance(coinbase), coinbaseBalanceBefore)
-	ret["coinbaseDiff"] = coinbaseDiff.String()
-	ret["gasFees"] = gasFees.String()
-	ret["ethSentToCoinbase"] = new(big.Int).Sub(coinbaseDiff, gasFees).String()
-	ret["bundleGasPrice"] = new(big.Int).Div(coinbaseDiff, big.NewInt(int64(totalGasUsed))).String()
 	ret["totalGasUsed"] = totalGasUsed
 	ret["stateBlockNumber"] = parent.Number.Int64()
 
-	ret["bundleHash"] = "0x" + common.Bytes2Hex(bundleHash.Sum(nil))
 	return ret, nil
 }
 >>>>>>> add searchbundle
