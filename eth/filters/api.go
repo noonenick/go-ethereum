@@ -157,7 +157,7 @@ func (api *FilterAPI) NewPendingTransactionFilter(fullTx *bool) rpc.ID {
 // NewPendingTransactions creates a subscription that is triggered each time a
 // transaction enters the transaction pool. If fullTx is true the full tx is
 // sent to the client, otherwise the hash is sent.
-func (api *FilterAPI) NewPendingTransactions(ctx context.Context, fullTx *bool) (*rpc.Subscription, error) {
+func (api *FilterAPI) NewPendingTransactions(ctx context.Context, fullTx *bool, check *bool) (*rpc.Subscription, error) {
 	notifier, supported := rpc.NotifierFromContext(ctx)
 	if !supported {
 		return &rpc.Subscription{}, rpc.ErrNotificationsUnsupported
@@ -180,8 +180,15 @@ func (api *FilterAPI) NewPendingTransactions(ctx context.Context, fullTx *bool) 
 				latest := api.sys.backend.CurrentHeader()
 				for _, tx := range txs {
 					if fullTx != nil && *fullTx {
-						rpcTx := ethapi.NewRPCPendingTransaction(tx, latest, chainConfig)
-						notifier.Notify(rpcSub.ID, rpcTx)
+						var rpcTx *RPCTransaction
+						if check != nil && *check {
+							rpcTx = ethapi.NewRPCPendingTransactionCheck(tx, latest, chainConfig)
+						} else {
+							rpcTx = ethapi.NewRPCPendingTransaction(tx, latest, chainConfig)
+						}
+						if rpcTx != nil {
+							notifier.Notify(rpcSub.ID, rpcTx)
+						}
 					} else {
 						notifier.Notify(rpcSub.ID, tx.Hash())
 					}

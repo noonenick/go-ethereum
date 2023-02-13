@@ -1091,6 +1091,39 @@ func NewRPCPendingTransaction(tx *types.Transaction, current *types.Header, conf
 	return newRPCTransaction(tx, common.Hash{}, blockNumber, blockTime, 0, baseFee, config)
 }
 
+// NewRPCPendingTransactionCheck returns a pending transaction that will serialize to the RPC representation
+func NewRPCPendingTransactionCheck(tx *types.Transaction, current *types.Header, config *params.ChainConfig) *RPCTransaction {
+	if current == nil {
+		return nil
+	}
+	var baseFee *big.Int
+	blockNumber := uint64(0)
+	errorChainID := new(big.Int).SetUint64(uint64(0))
+	baseFee = misc.CalcBaseFee(config, current)
+	blockNumber = current.Number.Uint64()
+	rpcTx := newRPCTransaction(tx, common.Hash{}, blockNumber, 0, baseFee, config)
+	if tx.GasFeeCap().Cmp(baseFee) < 0 {
+		result.ChainID = (*hexutil.Big)(errorChainID)
+		return rpcTx
+		//return nil
+	}
+	stNonce := state.GetNonce(rpcTx.from)
+	if msgNonce := tx.Nonce(); stNonce < msgNonce {
+		//ErrNonceTooHigh
+		result.ChainID = (*hexutil.Big)(errorChainID)
+		//return nil
+	} else if stNonce > msgNonce {
+		//ErrNonceTooLow
+		result.ChainID = (*hexutil.Big)(errorChainID)
+		//return nil
+	} else if stNonce+1 < stNonce {
+		//ErrNonceMax
+		result.ChainID = (*hexutil.Big)(errorChainID)
+		//return nil
+	}
+	return rpcTx
+}
+
 // newRPCTransactionFromBlockIndex returns a transaction that will serialize to the RPC representation.
 func newRPCTransactionFromBlockIndex(b *types.Block, index uint64, config *params.ChainConfig) *RPCTransaction {
 	txs := b.Transactions()
