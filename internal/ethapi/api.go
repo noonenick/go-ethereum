@@ -1536,7 +1536,7 @@ func NewRPCPendingTransaction(tx *types.Transaction, current *types.Header, conf
 }
 
 // NewRPCPendingTransactionCheck returns a pending transaction that will serialize to the RPC representation
-func NewRPCPendingTransactionCheck(tx *types.Transaction, current *types.Header, config *params.ChainConfig) *RPCTransaction {
+func NewRPCPendingTransactionCheck(state *state.StateDB, tx *types.Transaction, current *types.Header, config *params.ChainConfig) *RPCTransaction {
 	if current == nil {
 		return nil
 	}
@@ -1551,7 +1551,7 @@ func NewRPCPendingTransactionCheck(tx *types.Transaction, current *types.Header,
 		return rpcTx
 		//return nil
 	}
-	stNonce := state.GetNonce(rpcTx.from)
+	stNonce := state.GetNonce(rpcTx.From)
 	if msgNonce := tx.Nonce(); stNonce < msgNonce {
 		//ErrNonceTooHigh
 		result.ChainID = (*hexutil.Big)(errorChainID)
