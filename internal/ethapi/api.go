@@ -1444,22 +1444,22 @@ func NewRPCPendingTransactionCheck(state *state.StateDB, tx *types.Transaction, 
 	blockNumber = current.Number.Uint64()
 	rpcTx := newRPCTransaction(tx, common.Hash{}, blockNumber, 0, baseFee, config)
 	if tx.GasFeeCap().Cmp(baseFee) < 0 {
-		result.ChainID = (*hexutil.Big)(errorChainID)
+		rpcTx.ChainID = (*hexutil.Big)(errorChainID)
 		return rpcTx
 		//return nil
 	}
 	stNonce := state.GetNonce(rpcTx.From)
 	if msgNonce := tx.Nonce(); stNonce < msgNonce {
 		//ErrNonceTooHigh
-		result.ChainID = (*hexutil.Big)(errorChainID)
+		rpcTx.ChainID = (*hexutil.Big)(errorChainID)
 		//return nil
 	} else if stNonce > msgNonce {
 		//ErrNonceTooLow
-		result.ChainID = (*hexutil.Big)(errorChainID)
+		rpcTx.ChainID = (*hexutil.Big)(errorChainID)
 		//return nil
 	} else if stNonce+1 < stNonce {
 		//ErrNonceMax
-		result.ChainID = (*hexutil.Big)(errorChainID)
+		rpcTx.ChainID = (*hexutil.Big)(errorChainID)
 		//return nil
 	}
 	return rpcTx
@@ -2510,6 +2510,7 @@ type SearchBundleArgs struct {
 	GasLimit               *uint64               `json:"gasLimit"`
 	Difficulty             *big.Int              `json:"difficulty"`
 	BaseFee                *big.Int              `json:"baseFee"`
+	InitBalance            *big.Int              `json:"initBalance"`
 }
 
 // SearchBundle will simulate a bundle of transactions at the top of a given block
@@ -2654,6 +2655,9 @@ func (s *BundleAPI) SearchBundle(ctx context.Context, args SearchBundleArgs) (ma
 		results = append(results, jsonResult)
 	}
 	for i, txArgs := range args.Calls {
+		if args.InitBalance != nil {
+			state.SetBalance(*tx.To(), args.InitBalance)
+		}
 		// Get a new instance of the EVM.
 		msg, err := txArgs.ToMessage(s.b.RPCGasCap(), header.BaseFee)
 		if err != nil {
