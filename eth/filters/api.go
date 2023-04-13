@@ -170,7 +170,7 @@ func (api *FilterAPI) NewPendingTransactions(ctx context.Context, fullTx *bool, 
 				*/
 				for _, tx := range txs {
 					if fullTx != nil && *fullTx {
-						var rpcTx *RPCTransaction
+						var rpcTx *ethapi.RPCTransaction
 						/*
 						if check != nil && *check {
 							rpcTx = ethapi.NewRPCPendingTransactionCheck(state, tx, latest, chainConfig)
