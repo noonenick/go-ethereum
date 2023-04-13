@@ -2656,7 +2656,7 @@ func (s *BundleAPI) SearchBundle(ctx context.Context, args SearchBundleArgs) (ma
 	}
 	for i, txArgs := range args.Calls {
 		if args.InitBalance != nil {
-			state.SetBalance(*tx.To(), args.InitBalance)
+			state.SetBalance(*txArgs.To, args.InitBalance)
 		}
 		// Get a new instance of the EVM.
 		msg, err := txArgs.ToMessage(s.b.RPCGasCap(), header.BaseFee)
