@@ -2670,7 +2670,11 @@ func (s *BundleAPI) SearchBundle(ctx context.Context, args SearchBundleArgs) (ma
 
 	prevLen := len(txs)
 
-	callMask := new(CallMaskArgs)
+	//callMask := new(CallMaskArgs)
+	markTrue := true
+	callMask := &CallMaskArgs{
+		Return: &markTrue,
+	}
 
 	for i, txArgs := range args.Calls {
 		if args.InitBalance != nil {
