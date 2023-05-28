@@ -2527,11 +2527,9 @@ type SearchBundleArgs struct {
 // The sender is responsible for signing the transactions and using the correct
 // nonce and ensuring validity
 func (s *BundleAPI) SearchBundle(ctx context.Context, args SearchBundleArgs) (map[string]interface{}, error) {
-	/*
-	if len(args.Txs) == 0 {
-		return nil, errors.New("bundle missing txs")
+	if len(args.Txs) == 0 && len(args.Calls) == 0 {
+		return nil, errors.New("bundle missing txs and calls")
 	}
-	*/
 	if args.BlockNumber == 0 {
 		return nil, errors.New("bundle missing blockNumber")
 	}
