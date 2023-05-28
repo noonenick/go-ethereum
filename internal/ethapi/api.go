@@ -2595,10 +2595,17 @@ func (s *BundleAPI) EstimateGasBundle(ctx context.Context, args EstimateGasBundl
 	return ret, nil
 }
 
+type CallMaskArgs struct {
+	Logs          		*bool               `json:"logs"`
+	AccessList          *bool               `json:"accessList"`
+	Return              *bool               `json:"return"`
+}
+
 // SearchBundleArgs represents the arguments for a call.
 type SearchBundleArgs struct {
 	Txs                    []hexutil.Bytes       `json:"txs"`
 	Calls                  []TransactionArgs     `json:"calls"`
+	CallMasks              []CallMaskArgs        `json:"callMasks"`
 	BlockNumber            rpc.BlockNumber       `json:"blockNumber"`
 	StateBlockNumberOrHash rpc.BlockNumberOrHash `json:"stateBlockNumber"`
 	Coinbase               *string               `json:"coinbase"`
@@ -2617,9 +2624,11 @@ type SearchBundleArgs struct {
 // The sender is responsible for signing the transactions and using the correct
 // nonce and ensuring validity
 func (s *BundleAPI) SearchBundle(ctx context.Context, args SearchBundleArgs) (map[string]interface{}, error) {
+	/*
 	if len(args.Txs) == 0 {
 		return nil, errors.New("bundle missing txs")
 	}
+	*/
 	if args.BlockNumber == 0 {
 		return nil, errors.New("bundle missing blockNumber")
 	}
@@ -2751,24 +2760,50 @@ func (s *BundleAPI) SearchBundle(ctx context.Context, args SearchBundleArgs) (ma
 		jsonResult["logs"] = receipt.Logs
 		results = append(results, jsonResult)
 	}
+	// RPC Call gas cap
+	globalGasCap := s.b.RPCGasCap()
+	// Block context
+	blockContext := core.NewEVMBlockContext(header, s.chain, &coinbase)
+
+	prevLen := len(txs)
+
+	callMask := new(CallMaskArgs)
+
 	for i, txArgs := range args.Calls {
 		if args.InitBalance != nil {
 			state.SetBalance(*txArgs.To, args.InitBalance)
 		}
+		// Since its a txCall we'll just prepare the
+		// state with a random hash
+		var randomHash common.Hash
+		rand.Read(randomHash[:])
+
+		// New random hash since its a call
+		state.SetTxContext(randomHash, prevLen+i)
+
 		// Get a new instance of the EVM.
-		msg, err := txArgs.ToMessage(s.b.RPCGasCap(), header.BaseFee)
+		msg, err := txArgs.ToMessage(globalGasCap, header.BaseFee)
 		if err != nil {
 			return nil, fmt.Errorf("err: %w; calls.ToMessage %s", err, i)
 		}
-		context := core.NewEVMBlockContext(header, s.chain, &coinbase)
+		//context := core.NewEVMBlockContext(header, s.chain, &coinbase)
 		txContext := core.NewEVMTxContext(msg)
-		evm := vm.NewEVM(context, txContext, state, s.b.ChainConfig(), vm.Config{NoBaseFee: true})
+		//NoBaseFee for Call
+		evm := vm.NewEVM(blockContext, txContext, state, s.b.ChainConfig(), vm.Config{NoBaseFee: true})
 		// Execute the message.
 		//gp := new(core.GasPool).AddGas(math.MaxUint64)
 		result, err := core.ApplyMessage(evm, msg, gp)
 		if err := state.Error(); err != nil {
 			return nil, fmt.Errorf("err: %w; calls.ApplyMessage %s", err, i)
 		}
+		// Modifications are committed to the state
+		// Only delete empty objects if EIP158/161 (a.k.a Spurious Dragon) is in effect
+		state.Finalise(evm.ChainConfig().IsEIP158(blockNumber))
+
+		if len(args.CallMasks) > 0 {
+			callMask = args.CallMasks[i]
+		}
+
 		jsonResult := map[string]interface{}{}
 		if result.Err != nil {
 			jsonResult["error"] = result.Err.Error()
@@ -2777,9 +2812,18 @@ func (s *BundleAPI) SearchBundle(ctx context.Context, args SearchBundleArgs) (ma
 				jsonResult["revert"] = string(revert)
 			}
 		} else {
-			dst := make([]byte, hex.EncodedLen(len(result.Return())))
-			hex.Encode(dst, result.Return())
-			jsonResult["value"] = "0x" + string(dst)
+			jsonResult["gasUsed"] = result.UsedGas
+			if callMask.Return != nil && *callMask.Return {
+				dst := make([]byte, hex.EncodedLen(len(result.Return())))
+				hex.Encode(dst, result.Return())
+				jsonResult["value"] = "0x" + string(dst)
+			}
+			if callMask.AccessList != nil && *callMask.AccessList {
+				jsonResult["accessList"] = state.GetAccessList()
+			}
+			if callMask.Logs != nil && *callMask.Logs {
+				jsonResult["logs"] = state.GetLogs(randomHash, header.Number.Uint64(), header.Hash())
+			}
 		}
 		results = append(results, jsonResult)
 	}
