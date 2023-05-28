@@ -2801,7 +2801,7 @@ func (s *BundleAPI) SearchBundle(ctx context.Context, args SearchBundleArgs) (ma
 		state.Finalise(evm.ChainConfig().IsEIP158(blockNumber))
 
 		if len(args.CallMasks) > 0 {
-			callMask = args.CallMasks[i]
+			callMask = &args.CallMasks[i]
 		}
 
 		jsonResult := map[string]interface{}{}
