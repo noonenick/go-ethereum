@@ -2795,7 +2795,8 @@ func (s *BundleAPI) SearchBundle(ctx context.Context, args SearchBundleArgs) (ma
 		// Execute the message.
 		//gp := new(core.GasPool).AddGas(math.MaxUint64)
 		result, err := core.ApplyMessage(evm, msg, gp)
-		if err := state.Error(); err != nil {
+		//if err := state.Error(); err != nil {
+		if err != nil {
 			return nil, fmt.Errorf("err: %w; calls.ApplyMessage %s", err, i)
 		}
 		// Modifications are committed to the state
