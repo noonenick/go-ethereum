@@ -1543,9 +1543,9 @@ func NewRPCPendingTransactionCheck(state *state.StateDB, tx *types.Transaction, 
 	var baseFee *big.Int
 	blockNumber := uint64(0)
 	errorChainID := new(big.Int).SetUint64(uint64(0))
-	baseFee = misc.CalcBaseFee(config, current)
+	baseFee = eip1559.CalcBaseFee(config, current)
 	blockNumber = current.Number.Uint64()
-	rpcTx := newRPCTransaction(tx, common.Hash{}, blockNumber, 0, baseFee, config)
+	rpcTx := newRPCTransaction(tx, common.Hash{}, blockNumber, current.Time, 0, baseFee, config)
 	if tx.GasFeeCap().Cmp(baseFee) < 0 {
 		rpcTx.ChainID = (*hexutil.Big)(errorChainID)
 		return rpcTx
@@ -2372,7 +2372,7 @@ func (s *BundleAPI) CallBundle(ctx context.Context, args CallBundleArgs) (map[st
 	if args.BaseFee != nil {
 		baseFee = args.BaseFee
 	} else if s.b.ChainConfig().IsLondon(big.NewInt(args.BlockNumber.Int64())) {
-		baseFee = misc.CalcBaseFee(s.b.ChainConfig(), parent)
+		baseFee = eip1559.CalcBaseFee(s.b.ChainConfig(), parent)
 	}
 	header := &types.Header{
 		ParentHash: parent.Hash(),
@@ -2403,10 +2403,14 @@ func (s *BundleAPI) CallBundle(ctx context.Context, args CallBundleArgs) (map[st
 	gp := new(core.GasPool).AddGas(math.MaxUint64)
 
 	results := []map[string]interface{}{}
+	coinbaseBalanceBefore := state.GetBalance(coinbase)
 
-	signer := types.MakeSigner(s.b.ChainConfig(), blockNumber)
+	bundleHash := sha3.NewLegacyKeccak256()
+	signer := types.MakeSigner(s.b.ChainConfig(), blockNumber, timestamp)
 	var totalGasUsed uint64
+	gasFees := new(big.Int)
 	for i, tx := range txs {
+		coinbaseBalanceBeforeTx := state.GetBalance(coinbase)
 		//for state.AddLog
 		state.SetTxContext(tx.Hash(), i)
 
@@ -2432,10 +2436,12 @@ func (s *BundleAPI) CallBundle(ctx context.Context, args CallBundleArgs) (map[st
 		}
 		totalGasUsed += receipt.GasUsed
 		gasPrice, err := tx.EffectiveGasTip(header.BaseFee)
-		gasFeesTx := new(big.Int).Mul(big.NewInt(int64(receipt.GasUsed)), gasPrice)
-		if err != nil {
+				if err != nil {
 			return nil, fmt.Errorf("err: %w; txhash %s", err, tx.Hash())
 		}
+		gasFeesTx := new(big.Int).Mul(big.NewInt(int64(receipt.GasUsed)), gasPrice)
+		gasFees.Add(gasFees, gasFeesTx)
+		bundleHash.Write(tx.Hash().Bytes())
 		if result.Err != nil {
 			jsonResult["error"] = result.Err.Error()
 			revert := result.Revert()
@@ -2673,7 +2679,7 @@ func (s *BundleAPI) SearchBundle(ctx context.Context, args SearchBundleArgs) (ma
 	if args.BaseFee != nil {
 		baseFee = args.BaseFee
 	} else if s.b.ChainConfig().IsLondon(big.NewInt(args.BlockNumber.Int64())) {
-		baseFee = misc.CalcBaseFee(s.b.ChainConfig(), parent)
+		baseFee = eip1559.CalcBaseFee(s.b.ChainConfig(), parent)
 	}
 	header := &types.Header{
 		ParentHash: parent.Hash(),
@@ -2704,14 +2710,11 @@ func (s *BundleAPI) SearchBundle(ctx context.Context, args SearchBundleArgs) (ma
 	gp := new(core.GasPool).AddGas(math.MaxUint64)
 
 	results := []map[string]interface{}{}
-	coinbaseBalanceBefore := state.GetBalance(coinbase)
 
-	bundleHash := sha3.NewLegacyKeccak256()
 	signer := types.MakeSigner(s.b.ChainConfig(), blockNumber)
 	var totalGasUsed uint64
-	gasFees := new(big.Int)
-	for i, tx := range txs {
-		coinbaseBalanceBeforeTx := state.GetBalance(coinbase)
+		for i, tx := range txs {
+		//for state.AddLog
 		state.SetTxContext(tx.Hash(), i)
 
 		receipt, result, err := core.ApplyTransactionWithResult(s.b.ChainConfig(), s.chain, &coinbase, gp, state, header, tx, &header.GasUsed, vmconfig)
@@ -2736,13 +2739,11 @@ func (s *BundleAPI) SearchBundle(ctx context.Context, args SearchBundleArgs) (ma
 		}
 		totalGasUsed += receipt.GasUsed
 		gasPrice, err := tx.EffectiveGasTip(header.BaseFee)
+		gasFeesTx := new(big.Int).Mul(big.NewInt(int64(receipt.GasUsed)), gasPrice)
 		if err != nil {
 			return nil, fmt.Errorf("err: %w; txhash %s", err, tx.Hash())
 		}
-		gasFeesTx := new(big.Int).Mul(big.NewInt(int64(receipt.GasUsed)), gasPrice)
-		gasFees.Add(gasFees, gasFeesTx)
-		bundleHash.Write(tx.Hash().Bytes())
-		if result.Err != nil {
+				if result.Err != nil {
 			jsonResult["error"] = result.Err.Error()
 			revert := result.Revert()
 			if len(revert) > 0 {
