@@ -2614,7 +2614,7 @@ func (s *BundleAPI) SearchBundle(ctx context.Context, args SearchBundleArgs) (ma
 
 	results := []map[string]interface{}{}
 
-	signer := types.MakeSigner(s.b.ChainConfig(), blockNumber)
+	signer := types.MakeSigner(s.b.ChainConfig(), blockNumber, timestamp)
 	var totalGasUsed uint64
 		for i, tx := range txs {
 		//for state.AddLog
