@@ -2572,6 +2572,7 @@ type SearchBundleArgs struct {
 	Difficulty             *big.Int              `json:"difficulty"`
 	BaseFee                *big.Int              `json:"baseFee"`
 	InitBalance            *big.Int              `json:"initBalance"`
+	ReturnIfFail           *bool                 `json:"returnIfFail"`
 }
 
 // SearchBundle will simulate a bundle of transactions at the top of a given block
@@ -2664,7 +2665,7 @@ func (s *BundleAPI) SearchBundle(ctx context.Context, args SearchBundleArgs) (ma
 
 	signer := types.MakeSigner(s.b.ChainConfig(), blockNumber, timestamp)
 	var totalGasUsed uint64
-		for i, tx := range txs {
+	for i, tx := range txs {
 		//for state.AddLog
 		state.SetTxContext(tx.Hash(), i)
 
@@ -2694,7 +2695,7 @@ func (s *BundleAPI) SearchBundle(ctx context.Context, args SearchBundleArgs) (ma
 		if err != nil {
 			return nil, fmt.Errorf("err: %w; txhash %s", err, tx.Hash())
 		}
-				if result.Err != nil {
+		if result.Err != nil {
 			jsonResult["error"] = result.Err.Error()
 			revert := result.Revert()
 			if len(revert) > 0 {
@@ -2765,6 +2766,10 @@ func (s *BundleAPI) SearchBundle(ctx context.Context, args SearchBundleArgs) (ma
 			revert := result.Revert()
 			if len(revert) > 0 {
 				jsonResult["revert"] = string(revert)
+			}
+			if args.ReturnIfFail != nil && *args.ReturnIfFail {
+				results = append(results, jsonResult)
+				break
 			}
 		} else {
 			jsonResult["gasUsed"] = result.UsedGas
