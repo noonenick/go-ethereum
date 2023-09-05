@@ -2713,6 +2713,7 @@ func (s *BundleAPI) SearchBundle(ctx context.Context, args SearchBundleArgs) (ma
 		}
 
 		jsonResult := map[string]interface{}{}
+		jsonResult["gasUsed"] = result.UsedGas
 		if result.Err != nil {
 			jsonResult["error"] = result.Err.Error()
 			revert := result.Revert()
@@ -2724,7 +2725,6 @@ func (s *BundleAPI) SearchBundle(ctx context.Context, args SearchBundleArgs) (ma
 				break
 			}
 		} else {
-			jsonResult["gasUsed"] = result.UsedGas
 			if callMask.Return != nil && *callMask.Return {
 				dst := make([]byte, hex.EncodedLen(len(result.Return())))
 				hex.Encode(dst, result.Return())
