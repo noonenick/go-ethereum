@@ -2236,6 +2236,7 @@ func (s *BundleAPI) EstimateGasBundle(ctx context.Context, args EstimateGasBundl
 =======
 
 type CallMaskArgs struct {
+	Balance        		*bool               `json:"balance"`
 	Logs          		*bool               `json:"logs"`
 	AccessList          *bool               `json:"accessList"`
 	Return              *bool               `json:"return"`
@@ -2410,7 +2411,11 @@ func (s *BundleAPI) SearchBundle(ctx context.Context, args SearchBundleArgs) (ma
 	}
 
 	for i, txArgs := range args.Calls {
-		if args.InitBalance != nil {
+		if len(args.CallMasks) > 0 {
+			callMask = &args.CallMasks[i]
+		}
+
+		if args.InitBalance != nil && callMask.Balance != nil && *callMask.Balance {
 			state.SetBalance(*txArgs.To, args.InitBalance.ToInt())
 		}
 		// Since its a txCall we'll just prepare the
@@ -2440,10 +2445,6 @@ func (s *BundleAPI) SearchBundle(ctx context.Context, args SearchBundleArgs) (ma
 		// Modifications are committed to the state
 		// Only delete empty objects if EIP158/161 (a.k.a Spurious Dragon) is in effect
 		state.Finalise(evm.ChainConfig().IsEIP158(blockNumber))
-
-		if len(args.CallMasks) > 0 {
-			callMask = &args.CallMasks[i]
-		}
 
 		jsonResult := map[string]interface{}{}
 		jsonResult["gasUsed"] = result.UsedGas
