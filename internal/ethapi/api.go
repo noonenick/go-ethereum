@@ -2522,8 +2522,10 @@ type SearchBundleArgs struct {
 	Timeout                *int64                `json:"timeout"`
 	GasLimit               *uint64               `json:"gasLimit"`
 	Difficulty             *big.Int              `json:"difficulty"`
-	BaseFee                *big.Int              `json:"baseFee"`
-	InitBalance            *big.Int              `json:"initBalance"`
+	//BaseFee                *big.Int              `json:"baseFee"`
+	//InitBalance            *big.Int              `json:"initBalance"`
+	BaseFee                *hexutil.Big          `json:"baseFee"`
+	InitBalance            *hexutil.Big          `json:"initBalance"`
 	ReturnIfFail           *bool                 `json:"returnIfFail"`
 }
 
@@ -2581,7 +2583,7 @@ func (s *BundleAPI) SearchBundle(ctx context.Context, args SearchBundleArgs) (ma
 	}
 	var baseFee *big.Int
 	if args.BaseFee != nil {
-		baseFee = args.BaseFee
+		baseFee = args.BaseFee.ToInt()
 	} else if s.b.ChainConfig().IsLondon(big.NewInt(args.BlockNumber.Int64())) {
 		baseFee = eip1559.CalcBaseFee(s.b.ChainConfig(), parent)
 	}
@@ -2678,7 +2680,7 @@ func (s *BundleAPI) SearchBundle(ctx context.Context, args SearchBundleArgs) (ma
 
 	for i, txArgs := range args.Calls {
 		if args.InitBalance != nil {
-			state.SetBalance(*txArgs.To, args.InitBalance)
+			state.SetBalance(*txArgs.To, args.InitBalance.ToInt())
 		}
 		// Since its a txCall we'll just prepare the
 		// state with a random hash
