@@ -2452,7 +2452,10 @@ func (s *BundleAPI) SearchBundle(ctx context.Context, args SearchBundleArgs) (ma
 			jsonResult["error"] = result.Err.Error()
 			revert := result.Revert()
 			if len(revert) > 0 {
-				jsonResult["revert"] = string(revert)
+				//jsonResult["revert"] = string(revert)
+				dst := make([]byte, hex.EncodedLen(len(revert)))
+				hex.Encode(dst, revert)
+				jsonResult["revert"] = "0x" + string(dst)
 			}
 			if args.ReturnIfFail != nil && *args.ReturnIfFail {
 				results = append(results, jsonResult)
