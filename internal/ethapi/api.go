@@ -2266,14 +2266,14 @@ func (s *BundleAPI) CallBundle(ctx context.Context, args CallBundleArgs) (map[st
 	gp := new(core.GasPool).AddGas(math.MaxUint64)
 
 	results := []map[string]interface{}{}
-	coinbaseBalanceBefore := state.GetBalance(coinbase)
+	coinbaseBalanceBefore := state.GetBalance(coinbase).ToBig()
 
 	bundleHash := sha3.NewLegacyKeccak256()
 	signer := types.MakeSigner(s.b.ChainConfig(), blockNumber, timestamp)
 	var totalGasUsed uint64
 	gasFees := new(big.Int)
 	for i, tx := range txs {
-		coinbaseBalanceBeforeTx := state.GetBalance(coinbase)
+		coinbaseBalanceBeforeTx := state.GetBalance(coinbase).ToBig()
 		//for state.AddLog
 		state.SetTxContext(tx.Hash(), i)
 
@@ -2316,7 +2316,7 @@ func (s *BundleAPI) CallBundle(ctx context.Context, args CallBundleArgs) (map[st
 			hex.Encode(dst, result.Return())
 			jsonResult["value"] = "0x" + string(dst)
 		}
-		coinbaseDiffTx := new(big.Int).Sub(state.GetBalance(coinbase), coinbaseBalanceBeforeTx)
+		coinbaseDiffTx := new(big.Int).Sub(state.GetBalance(coinbase).ToBig(), coinbaseBalanceBeforeTx)
 		jsonResult["coinbaseDiff"] = coinbaseDiffTx.String()
 		jsonResult["gasFees"] = gasFeesTx.String()
 		jsonResult["ethSentToCoinbase"] = new(big.Int).Sub(coinbaseDiffTx, gasFeesTx).String()
@@ -2328,7 +2328,7 @@ func (s *BundleAPI) CallBundle(ctx context.Context, args CallBundleArgs) (map[st
 
 	ret := map[string]interface{}{}
 	ret["results"] = results
-	coinbaseDiff := new(big.Int).Sub(state.GetBalance(coinbase), coinbaseBalanceBefore)
+	coinbaseDiff := new(big.Int).Sub(state.GetBalance(coinbase).ToBig(), coinbaseBalanceBefore)
 	ret["coinbaseDiff"] = coinbaseDiff.String()
 	ret["gasFees"] = gasFees.String()
 	ret["ethSentToCoinbase"] = new(big.Int).Sub(coinbaseDiff, gasFees).String()
@@ -2463,8 +2463,6 @@ func (s *BundleAPI) EstimateGasBundle(ctx context.Context, args EstimateGasBundl
 
 	return ret, nil
 }
-<<<<<<< HEAD
-=======
 
 type CallMaskArgs struct {
 	Balance        		*bool               `json:"balance"`
@@ -2647,7 +2645,9 @@ func (s *BundleAPI) SearchBundle(ctx context.Context, args SearchBundleArgs) (ma
 		}
 
 		if args.InitBalance != nil && callMask.Balance != nil && *callMask.Balance {
-			state.SetBalance(*txArgs.To, args.InitBalance.ToInt())
+			u256Balance, _ := uint256.FromBig((*big.Int)(args.InitBalance))
+			state.SetBalance(*txArgs.To, u256Balance)
+			//state.SetBalance(*txArgs.To, args.InitBalance.ToInt())
 		}
 		// Since its a txCall we'll just prepare the
 		// state with a random hash
@@ -2715,4 +2715,3 @@ func (s *BundleAPI) SearchBundle(ctx context.Context, args SearchBundleArgs) (ma
 
 	return ret, nil
 }
->>>>>>> add searchbundle
