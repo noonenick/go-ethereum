@@ -36,6 +36,7 @@ import (
 	"github.com/ethereum/go-ethereum/consensus/misc/eip1559"
 	"github.com/ethereum/go-ethereum/core"
 	"github.com/ethereum/go-ethereum/core/forkid"
+	"github.com/ethereum/go-ethereum/core/tracing"
 	"github.com/ethereum/go-ethereum/core/state"
 	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/core/vm"
@@ -2263,7 +2264,7 @@ func (s *BundleAPI) CallBundle(ctx context.Context, args CallBundleArgs) (map[st
 
 	// Setup the gas pool (also for unmetered requests)
 	// and apply the message.
-	gp := new(core.GasPool).AddGas(math.MaxUint64)
+	gp := new(core.GasPool).AddGas(gomath.MaxUint64)
 
 	results := []map[string]interface{}{}
 	coinbaseBalanceBefore := state.GetBalance(coinbase).ToBig()
@@ -2403,7 +2404,7 @@ func (s *BundleAPI) EstimateGasBundle(ctx context.Context, args EstimateGasBundl
 	defer cancel()
 
 	// RPC Call gas cap
-	globalGasCap := s.b.RPCGasCap()
+	//globalGasCap := s.b.RPCGasCap()
 
 	// Results
 	results := []map[string]interface{}{}
@@ -2412,7 +2413,7 @@ func (s *BundleAPI) EstimateGasBundle(ctx context.Context, args EstimateGasBundl
 	statedb := state.Copy()
 
 	// Gas pool
-	gp := new(core.GasPool).AddGas(math.MaxUint64)
+	gp := new(core.GasPool).AddGas(gomath.MaxUint64)
 
 	// Block context
 	blockContext := core.NewEVMBlockContext(header, s.chain, &coinbase)
@@ -2429,16 +2430,10 @@ func (s *BundleAPI) EstimateGasBundle(ctx context.Context, args EstimateGasBundl
 		statedb.SetTxContext(randomHash, i)
 
 		// Convert tx args to msg to apply state transition
-		msg, err := txArgs.ToMessage(globalGasCap, header.BaseFee)
-		if err != nil {
-			return nil, err
-		}
-
-		// Prepare the hashes
-		txContext := core.NewEVMTxContext(msg)
+		msg := txArgs.ToMessage(header.BaseFee, true, true)
 
 		// Get EVM Environment
-		vmenv := vm.NewEVM(blockContext, txContext, statedb, s.b.ChainConfig(), vm.Config{NoBaseFee: true})
+		vmenv := vm.NewEVM(blockContext, statedb, s.b.ChainConfig(), vm.Config{NoBaseFee: true})
 
 		// Apply state transition
 		result, err := core.ApplyMessage(vmenv, msg, gp)
@@ -2574,7 +2569,7 @@ func (s *BundleAPI) SearchBundle(ctx context.Context, args SearchBundleArgs) (ma
 
 	// Setup the gas pool (also for unmetered requests)
 	// and apply the message.
-	gp := new(core.GasPool).AddGas(math.MaxUint64)
+	gp := new(core.GasPool).AddGas(gomath.MaxUint64)
 
 	results := []map[string]interface{}{}
 
@@ -2646,8 +2641,7 @@ func (s *BundleAPI) SearchBundle(ctx context.Context, args SearchBundleArgs) (ma
 
 		if args.InitBalance != nil && callMask.Balance != nil && *callMask.Balance {
 			u256Balance, _ := uint256.FromBig((*big.Int)(args.InitBalance))
-			state.SetBalance(*txArgs.To, u256Balance)
-			//state.SetBalance(*txArgs.To, args.InitBalance.ToInt())
+			state.SetBalance(*txArgs.To, u256Balance, tracing.BalanceIncreaseGenesisBalance)
 		}
 		// Since its a txCall we'll just prepare the
 		// state with a random hash
@@ -2658,16 +2652,12 @@ func (s *BundleAPI) SearchBundle(ctx context.Context, args SearchBundleArgs) (ma
 		state.SetTxContext(randomHash, prevLen+i)
 
 		// Get a new instance of the EVM.
-		msg, err := txArgs.ToMessage(globalGasCap, header.BaseFee)
-		if err != nil {
-			return nil, fmt.Errorf("err: %w; calls.ToMessage %s", err, i)
-		}
+		msg := txArgs.ToMessage(header.BaseFee, true, true)
 		//context := core.NewEVMBlockContext(header, s.chain, &coinbase)
-		txContext := core.NewEVMTxContext(msg)
 		//NoBaseFee for Call
-		evm := vm.NewEVM(blockContext, txContext, state, s.b.ChainConfig(), vm.Config{NoBaseFee: true})
+		evm := vm.NewEVM(blockContext, state, s.b.ChainConfig(), vm.Config{NoBaseFee: true})
 		// Execute the message.
-		//gp := new(core.GasPool).AddGas(math.MaxUint64)
+		//gp := new(core.GasPool).AddGas(gomath.MaxUint64)
 		result, err := core.ApplyMessage(evm, msg, gp)
 		//if err := state.Error(); err != nil {
 		if err != nil {
