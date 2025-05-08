@@ -2173,7 +2173,7 @@ func (s *BundleAPI) EstimateGasBundle(ctx context.Context, args EstimateGasBundl
 	defer cancel()
 
 	// RPC Call gas cap
-	//globalGasCap := s.b.RPCGasCap()
+	globalGasCap := s.b.RPCGasCap()
 
 	// Results
 	results := []map[string]interface{}{}
@@ -2198,6 +2198,9 @@ func (s *BundleAPI) EstimateGasBundle(ctx context.Context, args EstimateGasBundl
 		// New random hash since its a call
 		statedb.SetTxContext(randomHash, i)
 
+		if err := txArgs.CallDefaults(globalGasCap, blockContext.BaseFee, s.b.ChainConfig().ChainID); err != nil {
+			return nil, err
+		}
 		// Convert tx args to msg to apply state transition
 		msg := txArgs.ToMessage(header.BaseFee, true, true)
 
@@ -2420,6 +2423,14 @@ func (s *BundleAPI) SearchBundle(ctx context.Context, args SearchBundleArgs) (ma
 		// New random hash since its a call
 		state.SetTxContext(randomHash, prevLen+i)
 
+		/*
+		if txArgs.Gas == nil {
+			txArgs.Gas = new(hexutil.Uint64)
+		}
+		*/
+		if err := txArgs.CallDefaults(globalGasCap, blockContext.BaseFee, s.b.ChainConfig().ChainID); err != nil {
+			return nil, err
+		}
 		// Get a new instance of the EVM.
 		msg := txArgs.ToMessage(header.BaseFee, true, true)
 		//context := core.NewEVMBlockContext(header, s.chain, &coinbase)
