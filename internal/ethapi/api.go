@@ -2433,7 +2433,7 @@ func (s *BundleAPI) EstimateGasBundle(ctx context.Context, args EstimateGasBundl
 			return nil, err
 		}
 		// Convert tx args to msg to apply state transition
-		msg := txArgs.ToMessage(header.BaseFee, true, true)
+		msg := txArgs.ToMessage(header.BaseFee, true)
 
 		// Get EVM Environment
 		vmenv := vm.NewEVM(blockContext, statedb, s.b.ChainConfig(), vm.Config{NoBaseFee: true})
@@ -2663,7 +2663,7 @@ func (s *BundleAPI) SearchBundle(ctx context.Context, args SearchBundleArgs) (ma
 			return nil, err
 		}
 		// Get a new instance of the EVM.
-		msg := txArgs.ToMessage(header.BaseFee, true, true)
+		msg := txArgs.ToMessage(header.BaseFee, true)
 		//context := core.NewEVMBlockContext(header, s.chain, &coinbase)
 		//NoBaseFee for Call
 		evm := vm.NewEVM(blockContext, state, s.b.ChainConfig(), vm.Config{NoBaseFee: true})
