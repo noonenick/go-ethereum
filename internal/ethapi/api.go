@@ -2791,7 +2791,7 @@ func (s *BundleAPI) SearchBundle(ctx context.Context, args SearchBundleArgs) (ma
 				jsonResult["accessList"] = state.GetAccessList()
 			}
 			if callMask.Logs != nil && *callMask.Logs {
-				jsonResult["logs"] = state.GetLogs(randomHash, header.Number.Uint64(), header.Hash())
+				jsonResult["logs"] = state.GetLogs(randomHash, header.Number.Uint64(), header.Hash(), header.Time)
 			}
 		}
 		results = append(results, jsonResult)
