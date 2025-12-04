@@ -267,7 +267,7 @@ func MakeReceipt(evm *vm.EVM, result *ExecutionResult, statedb *state.StateDB, b
 	return receipt
 }
 
-func applyTransactionWithResult(msg *Message, gp *GasPool, statedb *state.StateDB, blockNumber *big.Int, blockHash common.Hash, tx *types.Transaction, usedGas *uint64, evm *vm.EVM) (receipt *types.Receipt, result1 *ExecutionResult, err error) {
+func applyTransactionWithResult(msg *Message, gp *GasPool, statedb *state.StateDB, blockNumber *big.Int, blockHash common.Hash, blockTime uint64, tx *types.Transaction, usedGas *uint64, evm *vm.EVM) (receipt *types.Receipt, result1 *ExecutionResult, err error) {
 	if hooks := evm.Config.Tracer; hooks != nil {
 		if hooks.OnTxStart != nil {
 			hooks.OnTxStart(evm.GetVMContext(), tx, msg.From)
@@ -296,7 +296,7 @@ func applyTransactionWithResult(msg *Message, gp *GasPool, statedb *state.StateD
 		statedb.AccessEvents().Merge(evm.AccessEvents)
 	}
 
-	return MakeReceipt(evm, result, statedb, blockNumber, blockHash, tx, *usedGas, root), result, nil
+	return MakeReceipt(evm, result, statedb, blockNumber, blockHash, blockTime, tx, *usedGas, root), result, nil
 }
 /*
 func applyTransactionWithResult(msg *Message, config *params.ChainConfig, bc ChainContext, author *common.Address, gp *GasPool, statedb *state.StateDB, header *types.Header, tx *types.Transaction, usedGas *uint64, evm *vm.EVM) (*types.Receipt, *ExecutionResult, error) {
@@ -556,5 +556,5 @@ func ApplyTransactionWithResult(config *params.ChainConfig, bc ChainContext, aut
 	blockContext := NewEVMBlockContext(header, bc, author)
 	vmenv := vm.NewEVM(blockContext, statedb, config, cfg)
 	//return applyTransactionWithResult(msg, config, bc, author, gp, statedb, header, tx, usedGas, vmenv)
-	return applyTransactionWithResult(msg, gp, statedb, header.Number, header.Hash(), tx, usedGas, vmenv)
+	return applyTransactionWithResult(msg, gp, statedb, header.Number, header.Hash(), header.Time, tx, usedGas, vmenv)
 }
