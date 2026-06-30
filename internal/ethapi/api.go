@@ -49,7 +49,6 @@ import (
 	"github.com/ethereum/go-ethereum/params"
 	"github.com/ethereum/go-ethereum/rlp"
 	"github.com/ethereum/go-ethereum/rpc"
-	"github.com/ethereum/go-ethereum/trie"
 	"github.com/holiman/uint256"
 	//"github.com/tyler-smith/go-bip39"
 	"golang.org/x/crypto/sha3"
@@ -2352,7 +2351,7 @@ func (s *BundleAPI) CallBundle(ctx context.Context, args CallBundleArgs) (map[st
 
 	// Setup the gas pool (also for unmetered requests)
 	// and apply the message.
-	gp := new(core.GasPool).AddGas(gomath.MaxUint64)
+	gp := core.NewGasPool(gomath.MaxUint64)
 
 	results := []map[string]interface{}{}
 	coinbaseBalanceBefore := state.GetBalance(coinbase).ToBig()
@@ -2364,7 +2363,7 @@ func (s *BundleAPI) CallBundle(ctx context.Context, args CallBundleArgs) (map[st
 	for i, tx := range txs {
 		coinbaseBalanceBeforeTx := state.GetBalance(coinbase).ToBig()
 		//for state.AddLog
-		state.SetTxContext(tx.Hash(), i)
+		state.SetTxContext(tx.Hash(), i, uint32(i+1))
 
 		receipt, result, err := core.ApplyTransactionWithResult(s.b.ChainConfig(), s.chain, &coinbase, gp, state, header, tx, &header.GasUsed, vmconfig)
 		if err != nil {
@@ -2501,7 +2500,7 @@ func (s *BundleAPI) EstimateGasBundle(ctx context.Context, args EstimateGasBundl
 	statedb := state.Copy()
 
 	// Gas pool
-	gp := new(core.GasPool).AddGas(gomath.MaxUint64)
+	gp := core.NewGasPool(gomath.MaxUint64)
 
 	// Block context
 	blockContext := core.NewEVMBlockContext(header, s.chain, &coinbase)
@@ -2515,7 +2514,7 @@ func (s *BundleAPI) EstimateGasBundle(ctx context.Context, args EstimateGasBundl
 		rand.Read(randomHash[:])
 
 		// New random hash since its a call
-		statedb.SetTxContext(randomHash, i)
+		statedb.SetTxContext(randomHash, i, uint32(i+1))
 
 		if err := txArgs.CallDefaults(globalGasCap, blockContext.BaseFee, s.b.ChainConfig().ChainID); err != nil {
 			return nil, err
@@ -2660,7 +2659,7 @@ func (s *BundleAPI) SearchBundle(ctx context.Context, args SearchBundleArgs) (ma
 
 	// Setup the gas pool (also for unmetered requests)
 	// and apply the message.
-	gp := new(core.GasPool).AddGas(gomath.MaxUint64)
+	gp := core.NewGasPool(gomath.MaxUint64)
 
 	results := []map[string]interface{}{}
 
@@ -2668,7 +2667,7 @@ func (s *BundleAPI) SearchBundle(ctx context.Context, args SearchBundleArgs) (ma
 	var totalGasUsed uint64
 	for i, tx := range txs {
 		//for state.AddLog
-		state.SetTxContext(tx.Hash(), i)
+		state.SetTxContext(tx.Hash(), i, uint32(i+1))
 
 		receipt, result, err := core.ApplyTransactionWithResult(s.b.ChainConfig(), s.chain, &coinbase, gp, state, header, tx, &header.GasUsed, vmconfig)
 		if err != nil {
@@ -2740,7 +2739,7 @@ func (s *BundleAPI) SearchBundle(ctx context.Context, args SearchBundleArgs) (ma
 		rand.Read(randomHash[:])
 
 		// New random hash since its a call
-		state.SetTxContext(randomHash, prevLen+i)
+		state.SetTxContext(randomHash, prevLen+i, uint32(prevLen+i+1))
 
 		/*
 		if txArgs.Gas == nil {
