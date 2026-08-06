@@ -36,8 +36,8 @@ import (
 	"github.com/ethereum/go-ethereum/consensus/misc/eip1559"
 	"github.com/ethereum/go-ethereum/core"
 	"github.com/ethereum/go-ethereum/core/forkid"
-	"github.com/ethereum/go-ethereum/core/tracing"
 	"github.com/ethereum/go-ethereum/core/state"
+	"github.com/ethereum/go-ethereum/core/tracing"
 	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/core/vm"
 	"github.com/ethereum/go-ethereum/crypto"
@@ -2387,7 +2387,7 @@ func (s *BundleAPI) CallBundle(ctx context.Context, args CallBundleArgs) (map[st
 		}
 		totalGasUsed += receipt.GasUsed
 		gasPrice, err := tx.EffectiveGasTip(header.BaseFee)
-				if err != nil {
+		if err != nil {
 			return nil, fmt.Errorf("err: %w; txhash %s", err, tx.Hash())
 		}
 		gasFeesTx := new(big.Int).Mul(big.NewInt(int64(receipt.GasUsed)), gasPrice)
@@ -2550,10 +2550,10 @@ func (s *BundleAPI) EstimateGasBundle(ctx context.Context, args EstimateGasBundl
 }
 
 type CallMaskArgs struct {
-	Balance        		*bool               `json:"balance"`
-	Logs          		*bool               `json:"logs"`
-	AccessList          *bool               `json:"accessList"`
-	Return              *bool               `json:"return"`
+	Balance    *bool `json:"balance"`
+	Logs       *bool `json:"logs"`
+	AccessList *bool `json:"accessList"`
+	Return     *bool `json:"return"`
 }
 
 // SearchBundleArgs represents the arguments for a call.
@@ -2570,9 +2570,30 @@ type SearchBundleArgs struct {
 	Difficulty             *big.Int              `json:"difficulty"`
 	//BaseFee                *big.Int              `json:"baseFee"`
 	//InitBalance            *big.Int              `json:"initBalance"`
+	BaseFee      *hexutil.Big `json:"baseFee"`
+	InitBalance  *hexutil.Big `json:"initBalance"`
+	ReturnIfFail *bool        `json:"returnIfFail"`
+}
+
+const maxSearchBundleV2Calls = 512
+
+// SearchBundleV2Args separates the shared causal prefix from independently
+// evaluated candidate calls. Every candidate starts from the exact state
+// produced by Txs followed by PrefixCalls; candidate writes are never visible
+// to another candidate.
+type SearchBundleV2Args struct {
+	Txs                    []hexutil.Bytes       `json:"txs"`
+	PrefixCalls            []TransactionArgs     `json:"prefixCalls"`
+	Calls                  []TransactionArgs     `json:"calls"`
+	CallMasks              []CallMaskArgs        `json:"callMasks"`
+	BlockNumber            rpc.BlockNumber       `json:"blockNumber"`
+	StateBlockNumberOrHash rpc.BlockNumberOrHash `json:"stateBlockNumber"`
+	Coinbase               *string               `json:"coinbase"`
+	Timestamp              *uint64               `json:"timestamp"`
+	Timeout                *int64                `json:"timeout"`
+	GasLimit               *uint64               `json:"gasLimit"`
+	Difficulty             *big.Int              `json:"difficulty"`
 	BaseFee                *hexutil.Big          `json:"baseFee"`
-	InitBalance            *hexutil.Big          `json:"initBalance"`
-	ReturnIfFail           *bool                 `json:"returnIfFail"`
 }
 
 // SearchBundle will simulate a bundle of transactions at the top of a given block
@@ -2742,9 +2763,9 @@ func (s *BundleAPI) SearchBundle(ctx context.Context, args SearchBundleArgs) (ma
 		state.SetTxContext(randomHash, prevLen+i, uint32(prevLen+i+1))
 
 		/*
-		if txArgs.Gas == nil {
-			txArgs.Gas = new(hexutil.Uint64)
-		}
+			if txArgs.Gas == nil {
+				txArgs.Gas = new(hexutil.Uint64)
+			}
 		*/
 		if err := txArgs.CallDefaults(globalGasCap, blockContext.BaseFee, s.b.ChainConfig().ChainID); err != nil {
 			return nil, err
@@ -2759,7 +2780,7 @@ func (s *BundleAPI) SearchBundle(ctx context.Context, args SearchBundleArgs) (ma
 		result, err := core.ApplyMessage(evm, msg, gp)
 		//if err := state.Error(); err != nil {
 		if err != nil {
-			return nil, fmt.Errorf("err: %w; calls.ApplyMessage %s", err, i)
+			return nil, fmt.Errorf("err: %w; calls.ApplyMessage %d", err, i)
 		}
 		// Modifications are committed to the state
 		// Only delete empty objects if EIP158/161 (a.k.a Spurious Dragon) is in effect
@@ -2802,4 +2823,240 @@ func (s *BundleAPI) SearchBundle(ctx context.Context, args SearchBundleArgs) (ma
 	ret["stateBlockNumber"] = parent.Number.Int64()
 
 	return ret, nil
+}
+
+// SearchBundleV2 executes a causal prefix once and evaluates each candidate on
+// an independent copy of the resulting state. This turns path validation into
+// one node-local state operation without changing top-level call semantics.
+func (s *BundleAPI) SearchBundleV2(ctx context.Context, args SearchBundleV2Args) (map[string]interface{}, error) {
+	if len(args.Calls) == 0 {
+		return nil, errors.New("bundle missing candidate calls")
+	}
+	if len(args.Calls) > maxSearchBundleV2Calls {
+		return nil, fmt.Errorf("too many candidate calls: %d > %d", len(args.Calls), maxSearchBundleV2Calls)
+	}
+	if len(args.CallMasks) != 0 && len(args.CallMasks) != len(args.Calls) {
+		return nil, fmt.Errorf("callMasks length %d does not match calls length %d", len(args.CallMasks), len(args.Calls))
+	}
+	if args.BlockNumber == 0 {
+		return nil, errors.New("bundle missing blockNumber")
+	}
+	if args.StateBlockNumberOrHash.BlockHash == nil {
+		return nil, errors.New("bundle stateBlockNumber must be an exact block hash")
+	}
+	args.StateBlockNumberOrHash.RequireCanonical = true
+
+	txs := make(types.Transactions, 0, len(args.Txs))
+	for _, encodedTx := range args.Txs {
+		tx := new(types.Transaction)
+		if err := tx.UnmarshalBinary(encodedTx); err != nil {
+			return nil, err
+		}
+		txs = append(txs, tx)
+	}
+	defer func(start time.Time) {
+		log.Debug("Executing independent bundle search finished", "runtime", time.Since(start))
+	}(time.Now())
+
+	timeoutMilliseconds := int64(5000)
+	if args.Timeout != nil {
+		timeoutMilliseconds = *args.Timeout
+	}
+	timeout := time.Millisecond * time.Duration(timeoutMilliseconds)
+	var cancel context.CancelFunc
+	if timeout > 0 {
+		ctx, cancel = context.WithTimeout(ctx, timeout)
+	} else {
+		ctx, cancel = context.WithCancel(ctx)
+	}
+	defer cancel()
+
+	state, parent, err := s.b.StateAndHeaderByNumberOrHash(ctx, args.StateBlockNumberOrHash)
+	if state == nil || err != nil {
+		return nil, err
+	}
+	blockNumber := big.NewInt(int64(args.BlockNumber))
+	timestamp := parent.Time + 1
+	if args.Timestamp != nil {
+		timestamp = *args.Timestamp
+	}
+	coinbase := parent.Coinbase
+	if args.Coinbase != nil {
+		coinbase = common.HexToAddress(*args.Coinbase)
+	}
+	difficulty := parent.Difficulty
+	if args.Difficulty != nil {
+		difficulty = args.Difficulty
+	}
+	gasLimit := parent.GasLimit
+	if args.GasLimit != nil {
+		gasLimit = *args.GasLimit
+	}
+	var baseFee *big.Int
+	if args.BaseFee != nil {
+		baseFee = args.BaseFee.ToInt()
+	} else if s.b.ChainConfig().IsLondon(blockNumber) {
+		baseFee = eip1559.CalcBaseFee(s.b.ChainConfig(), parent)
+	}
+	header := &types.Header{
+		ParentHash: parent.Hash(),
+		Number:     blockNumber,
+		GasLimit:   gasLimit,
+		Time:       timestamp,
+		Difficulty: difficulty,
+		Coinbase:   coinbase,
+		BaseFee:    baseFee,
+	}
+
+	gasPool := core.NewGasPool(gomath.MaxUint64)
+	prefixResults := make([]map[string]interface{}, 0, len(txs)+len(args.PrefixCalls))
+	vmconfig := vm.Config{}
+	signer := types.MakeSigner(s.b.ChainConfig(), blockNumber, timestamp)
+	for i, tx := range txs {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
+		state.SetTxContext(tx.Hash(), i, uint32(i+1))
+		receipt, result, err := core.ApplyTransactionWithResult(
+			s.b.ChainConfig(), s.chain, &coinbase, gasPool, state, header, tx, &header.GasUsed, vmconfig,
+		)
+		if err != nil {
+			return nil, fmt.Errorf("prefix tx %d failed: %w; txhash %s", i, err, tx.Hash())
+		}
+		from, err := types.Sender(signer, tx)
+		if err != nil {
+			return nil, fmt.Errorf("prefix tx %d sender: %w", i, err)
+		}
+		entry := map[string]interface{}{
+			"kind":        "tx",
+			"index":       i,
+			"txHash":      tx.Hash().String(),
+			"fromAddress": from.String(),
+			"gasUsed":     receipt.GasUsed,
+		}
+		if result.Err != nil {
+			entry["error"] = result.Err.Error()
+			if revert := result.Revert(); len(revert) > 0 {
+				entry["revert"] = hexutil.Encode(revert)
+			}
+		} else {
+			entry["value"] = hexutil.Encode(result.Return())
+		}
+		prefixResults = append(prefixResults, entry)
+	}
+
+	blockContext := core.NewEVMBlockContext(header, s.chain, &coinbase)
+	rules := s.b.ChainConfig().Rules(blockContext.BlockNumber, blockContext.Random != nil, blockContext.Time)
+	precompiles := vm.ActivePrecompiledContracts(rules)
+	for i := range args.PrefixCalls {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
+		call := args.PrefixCalls[i]
+		callHash := crypto.Keccak256Hash([]byte("searchBundleV2-prefix"), new(big.Int).SetUint64(uint64(i)).Bytes())
+		state.SetTxContext(callHash, len(txs)+i, uint32(len(txs)+i+1))
+		callBlockContext := blockContext
+		result, err := applyMessage(
+			ctx, s.b, call, state, header, timeout, gasPool, &callBlockContext, &vm.Config{NoBaseFee: true}, precompiles,
+		)
+		if err != nil {
+			return nil, fmt.Errorf("prefix call %d failed: %w", i, err)
+		}
+		entry := searchBundleV2ExecutionResult("call", i, result)
+		prefixResults = append(prefixResults, entry)
+		state.Finalise(s.b.ChainConfig().IsEIP158(blockNumber))
+	}
+
+	baseState := state.Copy()
+	baseGasPool := gasPool.Snapshot()
+	results := make([]map[string]interface{}, 0, len(args.Calls))
+	var candidateGasUsed uint64
+	for i := range args.Calls {
+		if err := ctx.Err(); err != nil {
+			return map[string]interface{}{
+				"prefixResults":         prefixResults,
+				"results":               results,
+				"prefixGasUsed":         gasPool.Used(),
+				"candidateTotalGasUsed": candidateGasUsed,
+				"stateBlockNumber":      parent.Number.Int64(),
+				"stateBlockHash":        parent.Hash(),
+				"timedOut":              true,
+			}, nil
+		}
+
+		candidateState := baseState.Copy()
+		candidateGasPool := baseGasPool.Snapshot()
+		candidate := args.Calls[i]
+		callHash := crypto.Keccak256Hash([]byte("searchBundleV2-candidate"), new(big.Int).SetUint64(uint64(i)).Bytes())
+		candidateState.SetTxContext(callHash, len(txs)+len(args.PrefixCalls)+i, uint32(len(txs)+len(args.PrefixCalls)+i+1))
+		candidateBlockContext := blockContext
+		result, err := applyMessage(
+			ctx,
+			s.b,
+			candidate,
+			candidateState,
+			header,
+			timeout,
+			candidateGasPool,
+			&candidateBlockContext,
+			&vm.Config{NoBaseFee: true},
+			precompiles,
+		)
+		if err != nil {
+			results = append(results, map[string]interface{}{
+				"kind":  "candidate",
+				"index": i,
+				"error": err.Error(),
+			})
+			if ctx.Err() != nil {
+				break
+			}
+			continue
+		}
+		entry := searchBundleV2ExecutionResult("candidate", i, result)
+		candidateGasUsed += result.UsedGas
+		mask := CallMaskArgs{}
+		if len(args.CallMasks) > 0 {
+			mask = args.CallMasks[i]
+		}
+		if mask.AccessList != nil && *mask.AccessList {
+			entry["accessList"] = candidateState.GetAccessList()
+		}
+		if mask.Logs != nil && *mask.Logs {
+			entry["logs"] = candidateState.GetLogs(callHash, header.Number.Uint64(), header.Hash(), header.Time)
+		}
+		if mask.Return != nil && !*mask.Return {
+			delete(entry, "value")
+		}
+		results = append(results, entry)
+	}
+
+	return map[string]interface{}{
+		"prefixResults":         prefixResults,
+		"results":               results,
+		"prefixGasUsed":         gasPool.Used(),
+		"candidateTotalGasUsed": candidateGasUsed,
+		"stateBlockNumber":      parent.Number.Int64(),
+		"stateBlockHash":        parent.Hash(),
+		"timedOut":              ctx.Err() != nil,
+	}, nil
+}
+
+func searchBundleV2ExecutionResult(kind string, index int, result *core.ExecutionResult) map[string]interface{} {
+	entry := map[string]interface{}{
+		"kind":        kind,
+		"index":       index,
+		"gasUsed":     result.UsedGas,
+		"maxGasUsed":  result.MaxUsedGas,
+		"refundedGas": result.MaxUsedGas - result.UsedGas,
+	}
+	if result.Err != nil {
+		entry["error"] = result.Err.Error()
+		if revert := result.Revert(); len(revert) > 0 {
+			entry["revert"] = hexutil.Encode(revert)
+		}
+	} else {
+		entry["value"] = hexutil.Encode(result.Return())
+	}
+	return entry
 }

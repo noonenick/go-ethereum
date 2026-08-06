@@ -580,6 +580,17 @@ func (b testBackend) StateAndHeaderByNumberOrHash(ctx context.Context, blockNrOr
 	if blockNr, ok := blockNrOrHash.Number(); ok {
 		return b.StateAndHeaderByNumber(ctx, blockNr)
 	}
+	if blockHash, ok := blockNrOrHash.Hash(); ok {
+		header, err := b.HeaderByHash(ctx, blockHash)
+		if err != nil {
+			return nil, nil, err
+		}
+		if header == nil {
+			return nil, nil, errors.New("header not found")
+		}
+		stateDb, err := b.chain.StateAt(header)
+		return stateDb, header, err
+	}
 	panic("only implemented for number")
 }
 func (b testBackend) Pending() (*types.Block, types.Receipts, *state.StateDB) {
@@ -2611,6 +2622,102 @@ func TestSimulateV1ChainLinkage(t *testing.T) {
 	// whereas the second call should return the blockhash for block2 (i.e. block2.Hash()).
 	require.Equal(t, block1.Hash().Bytes(), []byte(results[2].Calls[0].ReturnValue), "returned blockhash for block1 does not match")
 	require.Equal(t, block2.Hash().Bytes(), []byte(results[2].Calls[1].ReturnValue), "returned blockhash for block2 does not match")
+}
+
+func TestSearchBundleV2CandidatesSharePrefixButNotCandidateState(t *testing.T) {
+	var (
+		sender       = common.Address{0xaa, 0x01}
+		contractAddr = common.Address{0xbb, 0x01}
+		gas          = hexutil.Uint64(100000)
+		gspec        = &core.Genesis{
+			Config: params.MergedTestChainConfig,
+			Alloc: types.GenesisAlloc{
+				sender: {Balance: big.NewInt(params.Ether)},
+				// Increment storage slot zero and return the incremented value.
+				contractAddr: {Code: common.FromHex("0x6000546001018060005560005260206000f3")},
+			},
+		}
+	)
+	backend := newTestBackend(t, 1, gspec, beacon.New(ethash.NewFaker()), func(i int, b *core.BlockGen) {})
+	api := NewBundleAPI(backend, backend.chain)
+	call := TransactionArgs{From: &sender, To: &contractAddr, Gas: &gas}
+	includeAccessList := true
+
+	response, err := api.SearchBundleV2(context.Background(), SearchBundleV2Args{
+		PrefixCalls:            []TransactionArgs{call},
+		Calls:                  []TransactionArgs{call, call},
+		CallMasks:              []CallMaskArgs{{AccessList: &includeAccessList}, {AccessList: &includeAccessList}},
+		BlockNumber:            rpc.BlockNumber(2),
+		StateBlockNumberOrHash: rpc.BlockNumberOrHashWithHash(backend.CurrentHeader().Hash(), true),
+	})
+	require.NoError(t, err)
+	results := response["results"].([]map[string]interface{})
+	require.Len(t, results, 2)
+	expected := "0x" + strings.Repeat("00", 31) + "02"
+	require.Equal(t, expected, results[0]["value"])
+	require.Equal(t, expected, results[1]["value"])
+	require.Equal(t, results[0]["gasUsed"], results[1]["gasUsed"])
+	require.Equal(t, results[0]["maxGasUsed"], results[1]["maxGasUsed"])
+	require.NotEmpty(t, results[0]["accessList"])
+	require.NotEmpty(t, results[1]["accessList"])
+}
+
+func TestSearchBundleV2SignedTransactionPrefix(t *testing.T) {
+	var (
+		account      = newTestAccount()
+		contractAddr = common.Address{0xbb, 0x02}
+		gas          = hexutil.Uint64(100000)
+		gspec        = &core.Genesis{
+			Config: params.MergedTestChainConfig,
+			Alloc: types.GenesisAlloc{
+				account.addr: {Balance: big.NewInt(params.Ether)},
+				contractAddr: {Code: common.FromHex("0x6000546001018060005560005260206000f3")},
+			},
+		}
+	)
+	backend := newTestBackend(t, 1, gspec, beacon.New(ethash.NewFaker()), func(i int, b *core.BlockGen) {})
+	signer := types.LatestSigner(params.MergedTestChainConfig)
+	tx := types.MustSignNewTx(account.key, signer, &types.LegacyTx{
+		Nonce:    0,
+		GasPrice: backend.CurrentHeader().BaseFee,
+		Gas:      uint64(gas),
+		To:       &contractAddr,
+	})
+	encodedTx, err := tx.MarshalBinary()
+	require.NoError(t, err)
+	call := TransactionArgs{From: &account.addr, To: &contractAddr, Gas: &gas}
+
+	response, err := NewBundleAPI(backend, backend.chain).SearchBundleV2(context.Background(), SearchBundleV2Args{
+		Txs:                    []hexutil.Bytes{encodedTx},
+		Calls:                  []TransactionArgs{call, call},
+		BlockNumber:            rpc.BlockNumber(2),
+		StateBlockNumberOrHash: rpc.BlockNumberOrHashWithHash(backend.CurrentHeader().Hash(), true),
+	})
+	require.NoError(t, err)
+	results := response["results"].([]map[string]interface{})
+	expected := "0x" + strings.Repeat("00", 31) + "02"
+	require.Equal(t, expected, results[0]["value"])
+	require.Equal(t, expected, results[1]["value"])
+}
+
+func TestSearchBundleV2RejectsMismatchedCallMasks(t *testing.T) {
+	api := &BundleAPI{}
+	_, err := api.SearchBundleV2(context.Background(), SearchBundleV2Args{
+		Calls:       []TransactionArgs{{}, {}},
+		CallMasks:   []CallMaskArgs{{}},
+		BlockNumber: rpc.BlockNumber(1),
+	})
+	require.EqualError(t, err, "callMasks length 1 does not match calls length 2")
+}
+
+func TestSearchBundleV2RequiresExactStateHash(t *testing.T) {
+	api := &BundleAPI{}
+	_, err := api.SearchBundleV2(context.Background(), SearchBundleV2Args{
+		Calls:                  []TransactionArgs{{}},
+		BlockNumber:            rpc.BlockNumber(1),
+		StateBlockNumberOrHash: rpc.BlockNumberOrHashWithNumber(rpc.LatestBlockNumber),
+	})
+	require.EqualError(t, err, "bundle stateBlockNumber must be an exact block hash")
 }
 
 func TestSimulateV1TxSender(t *testing.T) {
