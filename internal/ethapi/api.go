@@ -24,6 +24,7 @@ import (
 	"fmt"
 	gomath "math"
 	"math/big"
+	"sort"
 	"strings"
 	"time"
 
@@ -3020,7 +3021,11 @@ func (s *BundleAPI) SearchBundleV2(ctx context.Context, args SearchBundleV2Args)
 			mask = args.CallMasks[i]
 		}
 		if mask.AccessList != nil && *mask.AccessList {
-			entry["accessList"] = candidateState.GetAccessList()
+			accessList, err := searchBundleV2AccessList(candidateState.GetAccessList())
+			if err != nil {
+				return nil, fmt.Errorf("candidate %d access list: %w", i, err)
+			}
+			entry["accessList"] = accessList
 		}
 		if mask.Logs != nil && *mask.Logs {
 			entry["logs"] = candidateState.GetLogs(callHash, header.Number.Uint64(), header.Hash(), header.Time)
@@ -3040,6 +3045,33 @@ func (s *BundleAPI) SearchBundleV2(ctx context.Context, args SearchBundleV2Args)
 		"stateBlockHash":        parent.Hash(),
 		"timedOut":              ctx.Err() != nil,
 	}, nil
+}
+
+func searchBundleV2AccessList(entries map[string]interface{}) (types.AccessList, error) {
+	accessList := make(types.AccessList, 0, len(entries))
+	for addressHex, rawSlots := range entries {
+		if !common.IsHexAddress(addressHex) {
+			return nil, fmt.Errorf("invalid address %q", addressHex)
+		}
+		slotStrings, ok := rawSlots.([]string)
+		if !ok {
+			return nil, fmt.Errorf("address %s has invalid storage-key list %T", addressHex, rawSlots)
+		}
+		storageKeys := make([]common.Hash, len(slotStrings))
+		for i, slotHex := range slotStrings {
+			if !common.IsHexHash(slotHex) {
+				return nil, fmt.Errorf("address %s has invalid storage key %q", addressHex, slotHex)
+			}
+			storageKeys[i] = common.HexToHash(slotHex)
+		}
+		sort.Slice(storageKeys, func(i, j int) bool { return storageKeys[i].Cmp(storageKeys[j]) < 0 })
+		accessList = append(accessList, types.AccessTuple{
+			Address:     common.HexToAddress(addressHex),
+			StorageKeys: storageKeys,
+		})
+	}
+	sort.Slice(accessList, func(i, j int) bool { return accessList[i].Address.Cmp(accessList[j].Address) < 0 })
+	return accessList, nil
 }
 
 func searchBundleV2ExecutionResult(kind string, index int, result *core.ExecutionResult) map[string]interface{} {

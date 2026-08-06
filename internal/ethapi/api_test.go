@@ -2658,8 +2658,15 @@ func TestSearchBundleV2CandidatesSharePrefixButNotCandidateState(t *testing.T) {
 	require.Equal(t, expected, results[1]["value"])
 	require.Equal(t, results[0]["gasUsed"], results[1]["gasUsed"])
 	require.Equal(t, results[0]["maxGasUsed"], results[1]["maxGasUsed"])
-	require.NotEmpty(t, results[0]["accessList"])
-	require.NotEmpty(t, results[1]["accessList"])
+	firstAccessList, ok := results[0]["accessList"].(types.AccessList)
+	require.True(t, ok, "SearchBundleV2 must expose the standard EIP-2930 access-list wire type")
+	require.NotEmpty(t, firstAccessList)
+	secondAccessList, ok := results[1]["accessList"].(types.AccessList)
+	require.True(t, ok, "SearchBundleV2 must expose the standard EIP-2930 access-list wire type")
+	require.NotEmpty(t, secondAccessList)
+	encoded, err := json.Marshal(firstAccessList)
+	require.NoError(t, err)
+	require.Equal(t, byte('['), encoded[0], "access list JSON must be a sequence, not the internal StateDB map")
 }
 
 func TestSearchBundleV2SignedTransactionPrefix(t *testing.T) {
