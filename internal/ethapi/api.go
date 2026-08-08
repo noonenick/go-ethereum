@@ -2252,7 +2252,7 @@ type BundleAPI struct {
 
 // NewBundleAPI creates a new Tx Bundle API instance.
 func NewBundleAPI(b Backend, chain *core.BlockChain) *BundleAPI {
-	return &BundleAPI{b, chain}
+	return &BundleAPI{b: b, chain: chain}
 }
 
 // CallBundleArgs represents the arguments for a call.
@@ -2335,7 +2335,6 @@ func (s *BundleAPI) CallBundle(ctx context.Context, args CallBundleArgs) (map[st
 		Coinbase:   coinbase,
 		BaseFee:    baseFee,
 	}
-
 	// Setup context so it may be cancelled the call has completed
 	// or, in case of unmetered gas, setup a context with a timeout.
 	var cancel context.CancelFunc
@@ -2576,25 +2575,48 @@ type SearchBundleArgs struct {
 	ReturnIfFail *bool        `json:"returnIfFail"`
 }
 
-const maxSearchBundleV2Calls = 512
+const (
+	maxSearchBundleV2Calls           = 512
+	maxSearchBundleV2WatchedBalances = 8
+)
 
 // SearchBundleV2Args separates the shared causal prefix from independently
 // evaluated candidate calls. Every candidate starts from the exact state
 // produced by Txs followed by PrefixCalls; candidate writes are never visible
 // to another candidate.
 type SearchBundleV2Args struct {
-	Txs                    []hexutil.Bytes       `json:"txs"`
-	PrefixCalls            []TransactionArgs     `json:"prefixCalls"`
-	Calls                  []TransactionArgs     `json:"calls"`
-	CallMasks              []CallMaskArgs        `json:"callMasks"`
-	BlockNumber            rpc.BlockNumber       `json:"blockNumber"`
-	StateBlockNumberOrHash rpc.BlockNumberOrHash `json:"stateBlockNumber"`
-	Coinbase               *string               `json:"coinbase"`
-	Timestamp              *uint64               `json:"timestamp"`
-	Timeout                *int64                `json:"timeout"`
-	GasLimit               *uint64               `json:"gasLimit"`
-	Difficulty             *big.Int              `json:"difficulty"`
-	BaseFee                *hexutil.Big          `json:"baseFee"`
+	Txs                    []hexutil.Bytes                `json:"txs"`
+	PrefixCalls            []TransactionArgs              `json:"prefixCalls"`
+	Calls                  []TransactionArgs              `json:"calls"`
+	CallMasks              []CallMaskArgs                 `json:"callMasks"`
+	WatchedBalances        []SearchBundleV2WatchedBalance `json:"watchedBalances"`
+	ContextID              common.Hash                    `json:"contextId"`
+	PrefixDigest           common.Hash                    `json:"prefixDigest"`
+	BlockNumber            rpc.BlockNumber                `json:"blockNumber"`
+	StateBlockNumberOrHash rpc.BlockNumberOrHash          `json:"stateBlockNumber"`
+	Coinbase               *string                        `json:"coinbase"`
+	Timestamp              *uint64                        `json:"timestamp"`
+	Timeout                *int64                         `json:"timeout"`
+	GasLimit               *uint64                        `json:"gasLimit"`
+	Difficulty             *big.Int                       `json:"difficulty"`
+	BaseFee                *hexutil.Big                   `json:"baseFee"`
+}
+
+// SearchBundleV2Capabilities exposes the authoritative wire contract.
+func (s *BundleAPI) SearchBundleV2Capabilities() map[string]interface{} {
+	return map[string]interface{}{
+		"version":                   3,
+		"sharedPrefix":              true,
+		"independentCandidateState": true,
+		"returnData":                true,
+		"logs":                      true,
+		"accessList":                true,
+		"watchedBalanceDelta":       true,
+		"contextIdentity":           true,
+		"partialTimeout":            true,
+		"maxCalls":                  maxSearchBundleV2Calls,
+		"maxWatchedBalances":        maxSearchBundleV2WatchedBalances,
+	}
 }
 
 // SearchBundle will simulate a bundle of transactions at the top of a given block
@@ -2833,14 +2855,24 @@ func (s *BundleAPI) SearchBundleV2(ctx context.Context, args SearchBundleV2Args)
 	if len(args.Calls) == 0 {
 		return nil, errors.New("bundle missing candidate calls")
 	}
-	if len(args.Calls) > maxSearchBundleV2Calls {
-		return nil, fmt.Errorf("too many candidate calls: %d > %d", len(args.Calls), maxSearchBundleV2Calls)
+	totalCalls := len(args.Txs) + len(args.PrefixCalls) + len(args.Calls)
+	if totalCalls > maxSearchBundleV2Calls {
+		return nil, fmt.Errorf("too many prefix and candidate calls: %d > %d", totalCalls, maxSearchBundleV2Calls)
 	}
 	if len(args.CallMasks) != 0 && len(args.CallMasks) != len(args.Calls) {
 		return nil, fmt.Errorf("callMasks length %d does not match calls length %d", len(args.CallMasks), len(args.Calls))
 	}
 	if args.BlockNumber == 0 {
 		return nil, errors.New("bundle missing blockNumber")
+	}
+	if args.ContextID == (common.Hash{}) {
+		return nil, errors.New("bundle missing contextId")
+	}
+	if args.PrefixDigest == (common.Hash{}) {
+		return nil, errors.New("bundle missing prefixDigest")
+	}
+	if executedDigest := searchBundleV2PrefixDigest(args); args.PrefixDigest != executedDigest {
+		return nil, fmt.Errorf("bundle prefixDigest mismatch: declared %s executed %s", args.PrefixDigest, executedDigest)
 	}
 	if args.StateBlockNumberOrHash.BlockHash == nil {
 		return nil, errors.New("bundle stateBlockNumber must be an exact block hash")
@@ -2863,7 +2895,13 @@ func (s *BundleAPI) SearchBundleV2(ctx context.Context, args SearchBundleV2Args)
 	if args.Timeout != nil {
 		timeoutMilliseconds = *args.Timeout
 	}
+	if timeoutMilliseconds <= 0 {
+		return nil, errors.New("bundle timeout must be positive")
+	}
 	timeout := time.Millisecond * time.Duration(timeoutMilliseconds)
+	if len(args.WatchedBalances) > maxSearchBundleV2WatchedBalances {
+		return nil, fmt.Errorf("watched balances %d exceed interface maximum %d", len(args.WatchedBalances), maxSearchBundleV2WatchedBalances)
+	}
 	var cancel context.CancelFunc
 	if timeout > 0 {
 		ctx, cancel = context.WithTimeout(ctx, timeout)
@@ -2875,6 +2913,9 @@ func (s *BundleAPI) SearchBundleV2(ctx context.Context, args SearchBundleV2Args)
 	state, parent, err := s.b.StateAndHeaderByNumberOrHash(ctx, args.StateBlockNumberOrHash)
 	if state == nil || err != nil {
 		return nil, err
+	}
+	if args.BlockNumber != rpc.BlockNumber(parent.Number.Uint64()+1) {
+		return nil, fmt.Errorf("bundle blockNumber %d is not the child of state block %d", args.BlockNumber, parent.Number.Uint64())
 	}
 	blockNumber := big.NewInt(int64(args.BlockNumber))
 	timestamp := parent.Time + 1
@@ -2908,8 +2949,12 @@ func (s *BundleAPI) SearchBundleV2(ctx context.Context, args SearchBundleV2Args)
 		Coinbase:   coinbase,
 		BaseFee:    baseFee,
 	}
+	targetBaseFee := "0x0"
+	if header.BaseFee != nil {
+		targetBaseFee = hexutil.EncodeBig(header.BaseFee)
+	}
 
-	gasPool := core.NewGasPool(gomath.MaxUint64)
+	gasPool := core.NewGasPool(header.GasLimit)
 	prefixResults := make([]map[string]interface{}, 0, len(txs)+len(args.PrefixCalls))
 	vmconfig := vm.Config{}
 	signer := types.MakeSigner(s.b.ChainConfig(), blockNumber, timestamp)
@@ -2970,6 +3015,10 @@ func (s *BundleAPI) SearchBundleV2(ctx context.Context, args SearchBundleV2Args)
 
 	baseState := state.Copy()
 	baseGasPool := gasPool.Snapshot()
+	beforeBalances, err := searchBundleV2ReadBalances(ctx, s.b, baseState, header, blockContext, args.WatchedBalances)
+	if err != nil {
+		return nil, fmt.Errorf("read watched balances before candidates: %w", err)
+	}
 	results := make([]map[string]interface{}, 0, len(args.Calls))
 	var candidateGasUsed uint64
 	for i := range args.Calls {
@@ -2981,6 +3030,14 @@ func (s *BundleAPI) SearchBundleV2(ctx context.Context, args SearchBundleV2Args)
 				"candidateTotalGasUsed": candidateGasUsed,
 				"stateBlockNumber":      parent.Number.Int64(),
 				"stateBlockHash":        parent.Hash(),
+				"contextId":             args.ContextID,
+				"prefixDigest":          args.PrefixDigest,
+				"prefixCount":           len(txs) + len(args.PrefixCalls),
+				"targetBlockNumber":     header.Number.Uint64(),
+				"targetTimestamp":       header.Time,
+				"targetBaseFee":         targetBaseFee,
+				"targetGasLimit":        header.GasLimit,
+				"targetCoinbase":        header.Coinbase,
 				"timedOut":              true,
 			}, nil
 		}
@@ -3033,18 +3090,42 @@ func (s *BundleAPI) SearchBundleV2(ctx context.Context, args SearchBundleV2Args)
 		if mask.Return != nil && !*mask.Return {
 			delete(entry, "value")
 		}
+		if result.Err == nil && len(args.WatchedBalances) > 0 {
+			afterBalances, balanceErr := searchBundleV2ReadBalances(
+				ctx,
+				s.b,
+				candidateState,
+				header,
+				candidateBlockContext,
+				args.WatchedBalances,
+			)
+			if balanceErr != nil {
+				entry["infrastructureError"] = fmt.Sprintf("WATCHED_BALANCE_READ_FAILED: %v", balanceErr)
+			} else {
+				entry["balanceDeltas"] = searchBundleV2BalanceDeltas(args.WatchedBalances, beforeBalances, afterBalances)
+			}
+		}
 		results = append(results, entry)
 	}
 
-	return map[string]interface{}{
+	response := map[string]interface{}{
 		"prefixResults":         prefixResults,
 		"results":               results,
 		"prefixGasUsed":         gasPool.Used(),
 		"candidateTotalGasUsed": candidateGasUsed,
 		"stateBlockNumber":      parent.Number.Int64(),
 		"stateBlockHash":        parent.Hash(),
+		"contextId":             args.ContextID,
+		"prefixDigest":          args.PrefixDigest,
+		"prefixCount":           len(txs) + len(args.PrefixCalls),
+		"targetBlockNumber":     header.Number.Uint64(),
+		"targetTimestamp":       header.Time,
+		"targetBaseFee":         targetBaseFee,
+		"targetGasLimit":        header.GasLimit,
+		"targetCoinbase":        header.Coinbase,
 		"timedOut":              ctx.Err() != nil,
-	}, nil
+	}
+	return response, nil
 }
 
 func searchBundleV2AccessList(entries map[string]interface{}) (types.AccessList, error) {

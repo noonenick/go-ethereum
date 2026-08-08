@@ -2643,13 +2643,16 @@ func TestSearchBundleV2CandidatesSharePrefixButNotCandidateState(t *testing.T) {
 	call := TransactionArgs{From: &sender, To: &contractAddr, Gas: &gas}
 	includeAccessList := true
 
-	response, err := api.SearchBundleV2(context.Background(), SearchBundleV2Args{
+	args := SearchBundleV2Args{
 		PrefixCalls:            []TransactionArgs{call},
 		Calls:                  []TransactionArgs{call, call},
 		CallMasks:              []CallMaskArgs{{AccessList: &includeAccessList}, {AccessList: &includeAccessList}},
+		ContextID:              common.Hash{0x01},
 		BlockNumber:            rpc.BlockNumber(2),
 		StateBlockNumberOrHash: rpc.BlockNumberOrHashWithHash(backend.CurrentHeader().Hash(), true),
-	})
+	}
+	args.PrefixDigest = searchBundleV2PrefixDigest(args)
+	response, err := api.SearchBundleV2(context.Background(), args)
 	require.NoError(t, err)
 	results := response["results"].([]map[string]interface{})
 	require.Len(t, results, 2)
@@ -2694,12 +2697,15 @@ func TestSearchBundleV2SignedTransactionPrefix(t *testing.T) {
 	require.NoError(t, err)
 	call := TransactionArgs{From: &account.addr, To: &contractAddr, Gas: &gas}
 
-	response, err := NewBundleAPI(backend, backend.chain).SearchBundleV2(context.Background(), SearchBundleV2Args{
+	args := SearchBundleV2Args{
 		Txs:                    []hexutil.Bytes{encodedTx},
 		Calls:                  []TransactionArgs{call, call},
+		ContextID:              common.Hash{0x01},
 		BlockNumber:            rpc.BlockNumber(2),
 		StateBlockNumberOrHash: rpc.BlockNumberOrHashWithHash(backend.CurrentHeader().Hash(), true),
-	})
+	}
+	args.PrefixDigest = searchBundleV2PrefixDigest(args)
+	response, err := NewBundleAPI(backend, backend.chain).SearchBundleV2(context.Background(), args)
 	require.NoError(t, err)
 	results := response["results"].([]map[string]interface{})
 	expected := "0x" + strings.Repeat("00", 31) + "02"
@@ -2721,6 +2727,8 @@ func TestSearchBundleV2RequiresExactStateHash(t *testing.T) {
 	api := &BundleAPI{}
 	_, err := api.SearchBundleV2(context.Background(), SearchBundleV2Args{
 		Calls:                  []TransactionArgs{{}},
+		ContextID:              common.Hash{0x01},
+		PrefixDigest:           searchBundleV2PrefixDigest(SearchBundleV2Args{}),
 		BlockNumber:            rpc.BlockNumber(1),
 		StateBlockNumberOrHash: rpc.BlockNumberOrHashWithNumber(rpc.LatestBlockNumber),
 	})
