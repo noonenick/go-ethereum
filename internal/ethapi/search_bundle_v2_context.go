@@ -1,12 +1,59 @@
 package ethapi
 
 import (
+	"bytes"
 	"encoding/binary"
 	"math/big"
+	"sort"
 
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/crypto"
 )
+
+type SearchBundleV2StateDiff map[common.Address]map[common.Hash]common.Hash
+
+func (diff SearchBundleV2StateDiff) apply(setState func(common.Address, common.Hash, common.Hash)) {
+	addresses := make([]common.Address, 0, len(diff))
+	for address := range diff {
+		addresses = append(addresses, address)
+	}
+	sort.Slice(addresses, func(i, j int) bool { return bytes.Compare(addresses[i][:], addresses[j][:]) < 0 })
+	for _, address := range addresses {
+		slots := make([]common.Hash, 0, len(diff[address]))
+		for slot := range diff[address] {
+			slots = append(slots, slot)
+		}
+		sort.Slice(slots, func(i, j int) bool { return bytes.Compare(slots[i][:], slots[j][:]) < 0 })
+		for _, slot := range slots {
+			setState(address, slot, diff[address][slot])
+		}
+	}
+}
+
+func searchBundleV2StateDiffDigest(diff SearchBundleV2StateDiff) common.Hash {
+	encoded := []byte("search-bundle-v4-state-diff")
+	addresses := make([]common.Address, 0, len(diff))
+	for address := range diff {
+		addresses = append(addresses, address)
+	}
+	sort.Slice(addresses, func(i, j int) bool { return bytes.Compare(addresses[i][:], addresses[j][:]) < 0 })
+	encoded = binary.BigEndian.AppendUint64(encoded, uint64(len(addresses)))
+	for _, address := range addresses {
+		encoded = append(encoded, address[:]...)
+		slots := make([]common.Hash, 0, len(diff[address]))
+		for slot := range diff[address] {
+			slots = append(slots, slot)
+		}
+		sort.Slice(slots, func(i, j int) bool { return bytes.Compare(slots[i][:], slots[j][:]) < 0 })
+		encoded = binary.BigEndian.AppendUint64(encoded, uint64(len(slots)))
+		for _, slot := range slots {
+			encoded = append(encoded, slot[:]...)
+			value := diff[address][slot]
+			encoded = append(encoded, value[:]...)
+		}
+	}
+	return crypto.Keccak256Hash(encoded)
+}
 
 func searchBundleV2PrefixDigest(args SearchBundleV2Args) common.Hash {
 	encoded := []byte("search-bundle-v3-prefix")

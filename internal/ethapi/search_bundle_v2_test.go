@@ -16,6 +16,11 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+func setSearchBundleV2Digests(args *SearchBundleV2Args) {
+	args.StateDiffDigest = searchBundleV2StateDiffDigest(args.StateDiff)
+	args.PrefixDigest = searchBundleV2PrefixDigest(*args)
+}
+
 func TestSearchBundleV2ContextAndNativeBalanceDelta(t *testing.T) {
 	var (
 		sender    = common.Address{0xaa, 0x10}
@@ -46,11 +51,12 @@ func TestSearchBundleV2ContextAndNativeBalanceDelta(t *testing.T) {
 		Coinbase:               &coinbaseS,
 		BaseFee:                baseFee,
 	}
-	args.PrefixDigest = searchBundleV2PrefixDigest(args)
+	setSearchBundleV2Digests(&args)
 	response, err := api.SearchBundleV2(context.Background(), args)
 	require.NoError(t, err)
 	require.Equal(t, contextID, response["contextId"])
 	require.Equal(t, args.PrefixDigest, response["prefixDigest"])
+	require.Equal(t, searchBundleV2StateDiffDigest(args.StateDiff), response["stateDiffDigest"])
 	require.Equal(t, 0, response["prefixCount"])
 	require.Equal(t, uint64(2), response["targetBlockNumber"])
 	require.Equal(t, timestamp, response["targetTimestamp"])
@@ -91,7 +97,7 @@ func TestSearchBundleV2NativeSenderDeltaIncludesDeclaredGasCost(t *testing.T) {
 		StateBlockNumberOrHash: rpc.BlockNumberOrHashWithHash(backend.CurrentHeader().Hash(), true),
 		BaseFee:                baseFee,
 	}
-	args.PrefixDigest = searchBundleV2PrefixDigest(args)
+	setSearchBundleV2Digests(&args)
 	response, err := api.SearchBundleV2(context.Background(), args)
 	require.NoError(t, err)
 	result := response["results"].([]map[string]interface{})[0]
@@ -124,7 +130,7 @@ func TestSearchBundleV2ERC20BalanceDelta(t *testing.T) {
 		BlockNumber:            rpc.BlockNumber(2),
 		StateBlockNumberOrHash: rpc.BlockNumberOrHashWithHash(backend.CurrentHeader().Hash(), true),
 	}
-	args.PrefixDigest = searchBundleV2PrefixDigest(args)
+	setSearchBundleV2Digests(&args)
 	response, err := api.SearchBundleV2(context.Background(), args)
 	require.NoError(t, err)
 	results := response["results"].([]map[string]interface{})
@@ -159,7 +165,7 @@ func TestSearchBundleV2CandidatesCannotExceedTargetBlockGas(t *testing.T) {
 		StateBlockNumberOrHash: rpc.BlockNumberOrHashWithHash(backend.CurrentHeader().Hash(), true),
 		GasLimit:               &gasLimit,
 	}
-	args.PrefixDigest = searchBundleV2PrefixDigest(args)
+	setSearchBundleV2Digests(&args)
 	response, err := NewBundleAPI(backend, backend.chain).SearchBundleV2(context.Background(), args)
 	require.NoError(t, err)
 	results := response["results"].([]map[string]interface{})
@@ -184,7 +190,7 @@ func TestSearchBundleV2RejectsInvalidTargetBlockAndTimeout(t *testing.T) {
 		BlockNumber:            rpc.BlockNumber(3),
 		StateBlockNumberOrHash: rpc.BlockNumberOrHashWithHash(backend.CurrentHeader().Hash(), true),
 	}
-	base.PrefixDigest = searchBundleV2PrefixDigest(base)
+	setSearchBundleV2Digests(&base)
 	_, err := NewBundleAPI(backend, backend.chain).SearchBundleV2(context.Background(), base)
 	require.ErrorContains(t, err, "is not the child of state block")
 
@@ -198,10 +204,70 @@ func TestSearchBundleV2RejectsInvalidTargetBlockAndTimeout(t *testing.T) {
 func TestSearchBundleV2CapabilitiesExposeAuthoritativeWire(t *testing.T) {
 	api := &BundleAPI{}
 	capabilities := api.SearchBundleV2Capabilities()
-	require.Equal(t, 3, capabilities["version"])
+	require.Equal(t, 4, capabilities["version"])
+	require.Equal(t, true, capabilities["baseStateDiff"])
 	require.Equal(t, true, capabilities["watchedBalanceDelta"])
 	require.Equal(t, true, capabilities["contextIdentity"])
 	require.Equal(t, maxSearchBundleV2Calls, capabilities["maxCalls"])
+}
+
+func TestSearchBundleV2BaseStateDiffPrecedesPrefixAndCandidates(t *testing.T) {
+	var (
+		sender       = common.Address{0xaa, 0x14}
+		contractAddr = common.Address{0xbb, 0x14}
+		gas          = hexutil.Uint64(100_000)
+		gspec        = &core.Genesis{
+			Config: params.MergedTestChainConfig,
+			Alloc: types.GenesisAlloc{
+				sender:       {Balance: big.NewInt(params.Ether)},
+				contractAddr: {Code: common.FromHex("0x6000546001018060005560005260206000f3")},
+			},
+		}
+	)
+	backend := newTestBackend(t, 1, gspec, beacon.New(ethash.NewFaker()), func(i int, b *core.BlockGen) {})
+	call := TransactionArgs{From: &sender, To: &contractAddr, Gas: &gas}
+	args := SearchBundleV2Args{
+		StateDiff:              SearchBundleV2StateDiff{contractAddr: map[common.Hash]common.Hash{common.Hash{}: common.BigToHash(big.NewInt(40))}},
+		PrefixCalls:            []TransactionArgs{call},
+		Calls:                  []TransactionArgs{call, call},
+		ContextID:              common.Hash{0x14},
+		BlockNumber:            rpc.BlockNumber(2),
+		StateBlockNumberOrHash: rpc.BlockNumberOrHashWithHash(backend.CurrentHeader().Hash(), true),
+	}
+	setSearchBundleV2Digests(&args)
+	response, err := NewBundleAPI(backend, backend.chain).SearchBundleV2(context.Background(), args)
+	require.NoError(t, err)
+	results := response["results"].([]map[string]interface{})
+	expected := "0x" + strings.Repeat("00", 31) + "2a"
+	require.Equal(t, expected, results[0]["value"])
+	require.Equal(t, expected, results[1]["value"])
+}
+
+func TestSearchBundleV2RejectsMismatchedBaseStateDiffDigest(t *testing.T) {
+	api := &BundleAPI{}
+	_, err := api.SearchBundleV2(context.Background(), SearchBundleV2Args{
+		Calls:        []TransactionArgs{{}},
+		ContextID:    common.Hash{0x15},
+		PrefixDigest: searchBundleV2PrefixDigest(SearchBundleV2Args{}),
+		StateDiff: SearchBundleV2StateDiff{
+			common.Address{1}: map[common.Hash]common.Hash{common.Hash{}: common.Hash{2}},
+		},
+		StateDiffDigest: common.Hash{3},
+		BlockNumber:     rpc.BlockNumber(1),
+	})
+	require.ErrorContains(t, err, "stateDiffDigest mismatch")
+}
+
+func TestSearchBundleV2RequiresBaseStateDiffDigestEvenWhenEmpty(t *testing.T) {
+	api := &BundleAPI{}
+	_, err := api.SearchBundleV2(context.Background(), SearchBundleV2Args{
+		Calls:           []TransactionArgs{{}},
+		ContextID:       common.Hash{0x16},
+		PrefixDigest:    searchBundleV2PrefixDigest(SearchBundleV2Args{}),
+		BlockNumber:     rpc.BlockNumber(1),
+		StateDiffDigest: common.Hash{},
+	})
+	require.EqualError(t, err, "bundle missing stateDiffDigest")
 }
 
 func TestSearchBundleV2AdvertisedCallMaximumIncludesPrefix(t *testing.T) {

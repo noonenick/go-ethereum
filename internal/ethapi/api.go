@@ -2587,6 +2587,8 @@ const (
 type SearchBundleV2Args struct {
 	Txs                    []hexutil.Bytes                `json:"txs"`
 	PrefixCalls            []TransactionArgs              `json:"prefixCalls"`
+	StateDiff              SearchBundleV2StateDiff        `json:"stateDiff"`
+	StateDiffDigest        common.Hash                    `json:"stateDiffDigest"`
 	Calls                  []TransactionArgs              `json:"calls"`
 	CallMasks              []CallMaskArgs                 `json:"callMasks"`
 	WatchedBalances        []SearchBundleV2WatchedBalance `json:"watchedBalances"`
@@ -2605,7 +2607,7 @@ type SearchBundleV2Args struct {
 // SearchBundleV2Capabilities exposes the authoritative wire contract.
 func (s *BundleAPI) SearchBundleV2Capabilities() map[string]interface{} {
 	return map[string]interface{}{
-		"version":                   3,
+		"version":                   4,
 		"sharedPrefix":              true,
 		"independentCandidateState": true,
 		"returnData":                true,
@@ -2614,6 +2616,7 @@ func (s *BundleAPI) SearchBundleV2Capabilities() map[string]interface{} {
 		"watchedBalanceDelta":       true,
 		"contextIdentity":           true,
 		"partialTimeout":            true,
+		"baseStateDiff":             true,
 		"maxCalls":                  maxSearchBundleV2Calls,
 		"maxWatchedBalances":        maxSearchBundleV2WatchedBalances,
 	}
@@ -2871,6 +2874,12 @@ func (s *BundleAPI) SearchBundleV2(ctx context.Context, args SearchBundleV2Args)
 	if args.PrefixDigest == (common.Hash{}) {
 		return nil, errors.New("bundle missing prefixDigest")
 	}
+	if args.StateDiffDigest == (common.Hash{}) {
+		return nil, errors.New("bundle missing stateDiffDigest")
+	}
+	if executedDigest := searchBundleV2StateDiffDigest(args.StateDiff); args.StateDiffDigest != executedDigest {
+		return nil, fmt.Errorf("bundle stateDiffDigest mismatch: declared %s executed %s", args.StateDiffDigest, executedDigest)
+	}
 	if executedDigest := searchBundleV2PrefixDigest(args); args.PrefixDigest != executedDigest {
 		return nil, fmt.Errorf("bundle prefixDigest mismatch: declared %s executed %s", args.PrefixDigest, executedDigest)
 	}
@@ -2954,6 +2963,13 @@ func (s *BundleAPI) SearchBundleV2(ctx context.Context, args SearchBundleV2Args)
 		targetBaseFee = hexutil.EncodeBig(header.BaseFee)
 	}
 
+	blockContext := core.NewEVMBlockContext(header, s.chain, &coinbase)
+	rules := s.b.ChainConfig().Rules(blockContext.BlockNumber, blockContext.Random != nil, blockContext.Time)
+	precompiles := vm.ActivePrecompiledContracts(rules)
+	args.StateDiff.apply(func(address common.Address, slot common.Hash, value common.Hash) {
+		state.SetState(address, slot, value)
+	})
+	state.Finalise(false)
 	gasPool := core.NewGasPool(header.GasLimit)
 	prefixResults := make([]map[string]interface{}, 0, len(txs)+len(args.PrefixCalls))
 	vmconfig := vm.Config{}
@@ -2991,9 +3007,6 @@ func (s *BundleAPI) SearchBundleV2(ctx context.Context, args SearchBundleV2Args)
 		prefixResults = append(prefixResults, entry)
 	}
 
-	blockContext := core.NewEVMBlockContext(header, s.chain, &coinbase)
-	rules := s.b.ChainConfig().Rules(blockContext.BlockNumber, blockContext.Random != nil, blockContext.Time)
-	precompiles := vm.ActivePrecompiledContracts(rules)
 	for i := range args.PrefixCalls {
 		if err := ctx.Err(); err != nil {
 			return nil, err
@@ -3032,6 +3045,7 @@ func (s *BundleAPI) SearchBundleV2(ctx context.Context, args SearchBundleV2Args)
 				"stateBlockHash":        parent.Hash(),
 				"contextId":             args.ContextID,
 				"prefixDigest":          args.PrefixDigest,
+				"stateDiffDigest":       searchBundleV2StateDiffDigest(args.StateDiff),
 				"prefixCount":           len(txs) + len(args.PrefixCalls),
 				"targetBlockNumber":     header.Number.Uint64(),
 				"targetTimestamp":       header.Time,
@@ -3117,6 +3131,7 @@ func (s *BundleAPI) SearchBundleV2(ctx context.Context, args SearchBundleV2Args)
 		"stateBlockHash":        parent.Hash(),
 		"contextId":             args.ContextID,
 		"prefixDigest":          args.PrefixDigest,
+		"stateDiffDigest":       searchBundleV2StateDiffDigest(args.StateDiff),
 		"prefixCount":           len(txs) + len(args.PrefixCalls),
 		"targetBlockNumber":     header.Number.Uint64(),
 		"targetTimestamp":       header.Time,

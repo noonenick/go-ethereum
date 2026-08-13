@@ -2651,7 +2651,7 @@ func TestSearchBundleV2CandidatesSharePrefixButNotCandidateState(t *testing.T) {
 		BlockNumber:            rpc.BlockNumber(2),
 		StateBlockNumberOrHash: rpc.BlockNumberOrHashWithHash(backend.CurrentHeader().Hash(), true),
 	}
-	args.PrefixDigest = searchBundleV2PrefixDigest(args)
+	setSearchBundleV2Digests(&args)
 	response, err := api.SearchBundleV2(context.Background(), args)
 	require.NoError(t, err)
 	results := response["results"].([]map[string]interface{})
@@ -2704,7 +2704,7 @@ func TestSearchBundleV2SignedTransactionPrefix(t *testing.T) {
 		BlockNumber:            rpc.BlockNumber(2),
 		StateBlockNumberOrHash: rpc.BlockNumberOrHashWithHash(backend.CurrentHeader().Hash(), true),
 	}
-	args.PrefixDigest = searchBundleV2PrefixDigest(args)
+	setSearchBundleV2Digests(&args)
 	response, err := NewBundleAPI(backend, backend.chain).SearchBundleV2(context.Background(), args)
 	require.NoError(t, err)
 	results := response["results"].([]map[string]interface{})
@@ -2729,6 +2729,7 @@ func TestSearchBundleV2RequiresExactStateHash(t *testing.T) {
 		Calls:                  []TransactionArgs{{}},
 		ContextID:              common.Hash{0x01},
 		PrefixDigest:           searchBundleV2PrefixDigest(SearchBundleV2Args{}),
+		StateDiffDigest:        searchBundleV2StateDiffDigest(nil),
 		BlockNumber:            rpc.BlockNumber(1),
 		StateBlockNumberOrHash: rpc.BlockNumberOrHashWithNumber(rpc.LatestBlockNumber),
 	})
