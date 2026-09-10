@@ -2585,6 +2585,9 @@ const (
 // produced by Txs followed by PrefixCalls; candidate writes are never visible
 // to another candidate.
 type SearchBundleV2Args struct {
+	// StateReads execute zero-value calls without buying gas. They preserve the
+	// declared GASPRICE and target block environment, but cannot attest balances.
+	StateReads             bool                           `json:"stateReads,omitempty"`
 	Txs                    []hexutil.Bytes                `json:"txs"`
 	PrefixCalls            []TransactionArgs              `json:"prefixCalls"`
 	StateDiff              SearchBundleV2StateDiff        `json:"stateDiff"`
@@ -2617,6 +2620,7 @@ func (s *BundleAPI) SearchBundleV2Capabilities() map[string]interface{} {
 		"contextIdentity":           true,
 		"partialTimeout":            true,
 		"baseStateDiff":             true,
+		"stateReads":                true,
 		"maxCalls":                  maxSearchBundleV2Calls,
 		"maxWatchedBalances":        maxSearchBundleV2WatchedBalances,
 	}
@@ -2855,6 +2859,16 @@ func (s *BundleAPI) SearchBundle(ctx context.Context, args SearchBundleArgs) (ma
 // an independent copy of the resulting state. This turns path validation into
 // one node-local state operation without changing top-level call semantics.
 func (s *BundleAPI) SearchBundleV2(ctx context.Context, args SearchBundleV2Args) (map[string]interface{}, error) {
+	if args.StateReads {
+		if len(args.WatchedBalances) != 0 {
+			return nil, errors.New("state reads cannot attest watched balances")
+		}
+		for _, call := range args.Calls {
+			if call.To == nil || (call.Value != nil && call.Value.ToInt().Sign() != 0) || len(call.AuthorizationList) != 0 || len(call.BlobHashes) != 0 {
+				return nil, errors.New("state reads require zero-value contract calls without authorizations or blobs")
+			}
+		}
+	}
 	if len(args.Calls) == 0 {
 		return nil, errors.New("bundle missing candidate calls")
 	}
@@ -3062,6 +3076,16 @@ func (s *BundleAPI) SearchBundleV2(ctx context.Context, args SearchBundleV2Args)
 		callHash := crypto.Keccak256Hash([]byte("searchBundleV2-candidate"), new(big.Int).SetUint64(uint64(i)).Bytes())
 		candidateState.SetTxContext(callHash, len(txs)+len(args.PrefixCalls)+i, uint32(len(txs)+len(args.PrefixCalls)+i+1))
 		candidateBlockContext := blockContext
+		if args.StateReads {
+			result, err := searchBundleV2StateRead(ctx, s.b, candidate, candidateState, header, candidateBlockContext, candidateGasPool.Gas())
+			if err != nil {
+				results = append(results, map[string]interface{}{"kind": "stateRead", "index": i, "infrastructureError": err.Error()})
+			} else {
+				results = append(results, searchBundleV2ExecutionResult("stateRead", i, result))
+				candidateGasUsed += result.UsedGas
+			}
+			continue
+		}
 		result, err := applyMessage(
 			ctx,
 			s.b,

@@ -3,6 +3,7 @@ package ethapi
 import (
 	"context"
 	"math/big"
+	"strings"
 	"testing"
 
 	"github.com/ethereum/go-ethereum/common"
@@ -19,6 +20,62 @@ import (
 func setSearchBundleV2Digests(args *SearchBundleV2Args) {
 	args.StateDiffDigest = searchBundleV2StateDiffDigest(args.StateDiff)
 	args.PrefixDigest = searchBundleV2PrefixDigest(*args)
+}
+
+func TestSearchBundleV2StateReadsPreserveFeesAndIsolateWrites(t *testing.T) {
+	var (
+		sender   = common.Address{0xaa, 0x13}
+		contract = common.Address{0xbb, 0x13}
+		gas      = hexutil.Uint64(100_000)
+		fee      = (*hexutil.Big)(big.NewInt(7))
+		// Return GASPRICE, BASEFEE, slot 0; then store 9 in slot 0.
+		code  = common.FromHex("0x3a60005248602052600054604052600960005560606000f3")
+		gspec = &core.Genesis{Config: params.MergedTestChainConfig, Alloc: types.GenesisAlloc{
+			contract: {Code: code},
+		}}
+	)
+	backend := newTestBackend(t, 1, gspec, beacon.New(ethash.NewFaker()), func(i int, b *core.BlockGen) {})
+	api := NewBundleAPI(backend, backend.chain)
+	call := TransactionArgs{From: &sender, To: &contract, Gas: &gas, MaxFeePerGas: fee}
+	args := SearchBundleV2Args{
+		StateReads: true, Calls: []TransactionArgs{call, call},
+		ContextID: common.Hash{0x13}, BlockNumber: rpc.BlockNumber(2),
+		StateBlockNumberOrHash: rpc.BlockNumberOrHashWithHash(backend.CurrentHeader().Hash(), true), BaseFee: fee,
+	}
+	setSearchBundleV2Digests(&args)
+	response, err := api.SearchBundleV2(context.Background(), args)
+	require.NoError(t, err)
+	results := response["results"].([]map[string]interface{})
+	require.Len(t, results, 2)
+	for _, result := range results {
+		require.NotContains(t, result, "error")
+		require.NotContains(t, result, "infrastructureError")
+		require.NotContains(t, result, "balanceDeltas")
+		value := common.FromHex(result["value"].(string))
+		require.Len(t, value, 96)
+		require.Equal(t, int64(7), new(big.Int).SetBytes(value[:32]).Int64())
+		require.Equal(t, int64(7), new(big.Int).SetBytes(value[32:64]).Int64())
+		require.Zero(t, new(big.Int).SetBytes(value[64:]).Sign())
+	}
+	// A state read must see the real post-prefix state, despite discarding its
+	// own writes. Prefix execution keeps ordinary transaction semantics.
+	prefix := call
+	prefix.MaxFeePerGas = nil // the unfunded caller can run this zero-fee prefix
+	args.PrefixCalls = []TransactionArgs{prefix}
+	setSearchBundleV2Digests(&args)
+	response, err = api.SearchBundleV2(context.Background(), args)
+	require.NoError(t, err)
+	for _, result := range response["results"].([]map[string]interface{}) {
+		value := common.FromHex(result["value"].(string))
+		require.Equal(t, int64(9), new(big.Int).SetBytes(value[64:]).Int64())
+	}
+	args.WatchedBalances = []SearchBundleV2WatchedBalance{{Account: sender}}
+	_, err = api.SearchBundleV2(context.Background(), args)
+	require.ErrorContains(t, err, "cannot attest watched balances")
+	args.WatchedBalances = nil
+	args.Calls[0].Value = (*hexutil.Big)(big.NewInt(1))
+	_, err = api.SearchBundleV2(context.Background(), args)
+	require.ErrorContains(t, err, "zero-value")
 }
 
 func TestSearchBundleV2ContextAndNativeBalanceDelta(t *testing.T) {
